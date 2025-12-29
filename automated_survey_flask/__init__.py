@@ -2,11 +2,18 @@ from automated_survey_flask.config import config_env_files
 from flask import Flask
 
 from flask_sqlalchemy import SQLAlchemy
-
-db = SQLAlchemy()
+import os
+# db = SQLAlchemy()
 app = Flask(__name__)
 env = app.config.get("ENV", "production")
+app.secret_key = '123456qwertyasdfghzxcvbn1qaz2wsx3edc4rfv5tgb6yhn' # Use a random string
 
+################
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'app.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy()
+################ 
 
 def prepare_app(environment=env, p_db=db):
     app.config.from_object(config_env_files[environment])
