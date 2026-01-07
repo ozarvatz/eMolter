@@ -58,3 +58,25 @@ class Answer(db.Model):
         self.content = content
         self.question = question
         self.session_id = session_id
+
+############################
+# Example of how your models should look
+class Patient(db.Model):
+    __tablename__ = 'patients'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20), unique=True, nullable=False)
+    language = db.Column(db.String(10), nullable=False)
+    calls = db.relationship('Call', backref='patient', lazy=True)
+    def __init__(self, name, phone_number, language='iw-IL'):
+        self.name = name
+        self.phone_number = phone_number
+        self.language = language
+
+
+class Call(db.Model):
+    __tablename__ = 'calls'
+    id = db.Column(db.Integer, primary_key=True)
+    twilio_sid = db.Column(db.String, unique=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patients.id'))
+

@@ -9,6 +9,8 @@ import os
 @app.route('/voice', methods=['GET', 'POST'])
 def voice_survey():
     lang = request.args.get('lang')
+    patientName = request.args.get("name")
+
     if lang:
         session['lang'] = lang
     print(f"param lunguage = {lang}")
@@ -18,13 +20,13 @@ def voice_survey():
     # ✅ NEW CODE: GATHERING SPEECH
     gather = Gather(
         input='speech', # Set input type to speech
-        speech_timeout='6', #'auto', # Automatically ends listening when speech stops
+        speech_timeout='2', #'auto', # Automatically ends listening when speech stops
         language=f'{lang}', #'iw-IL', #'en-US',
         # voice='Google.he-IL-Standard-A',
         # hints='שלום, להתראות, סיום, הכל טוב, גרוע, בסדר, מצוין', # Add Hebrew hints here
         # speech_model='telephony', #'experimental_conversations', # Try this model
         # enhanced=True,
-        action='/handle-speech',
+        action=f'/handle-speech?lang={lang}&name={patientName}',
         method='POST'
         # action="https://expectative-refugio-bizarrely.ngrok-free.dev/handle-speech" # New route to handle the text result
 
@@ -34,7 +36,7 @@ def voice_survey():
     # Ask the first question
     # gather.say("Welcome to the automated survey. How is your day going so far?")
     gather.say(
-        "הי זה אני 'אימולטר', איך היום שלך עד כו?", 
+        "היי {} זה אני 'אימולטר', איך היום שלך עד כו?".format(patientName), 
         language=f'{lang}', #'iw-IL'
         voice='Google.he-IL-Standard-A',
         # hints='שלום, להתראות, סיום, הכל טוב, גרוע, בסדר, מצוין', # Add Hebrew hints here
@@ -76,8 +78,7 @@ def handle_speech():
     # Twilio sends the recognized text in the 'SpeechResult' parameter
     speech_result = request.form.get('SpeechResult', '').lower()
     patient_phone = request.form.get('To','') 
-    
-    
+        
     # print("\n--- Form Data (Twilio sends data here) ---")
     # for key, value in request.form.items():
     #     print(f"{key}: {value}")
@@ -86,7 +87,7 @@ def handle_speech():
     print(f"speech result: {speech_result}")
     print(f"patient phone: {patient_phone}")
     print(f"Type: {type(speech_result)}")
-    
+
     response = VoiceResponse()
     
     response.say(
