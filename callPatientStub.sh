@@ -1,0 +1,7 @@
+python callMe.py --phone +972503220778 --lang iw-IL --name "עוז" --batch "basic"
+#python callMe.py --phone +972503220778 --lang de-DE --name "Oz-Arvatz" --batch "basic"
+#python callMe.py --phone +972545706843 --lang iw-IL --name "בוריס"
+#python callMe.py --phone +972546646637 --lang iw-IL --name "זאב"
+#python callMe.py --phone +972524519706 --lang iw-IL --name "רקפת"
+#python callMe.py --phone +972544224132 --lang iw-IL --name "אבנר"
+#python callMe.py --phone +4917640500988 --lang de-DE --name "lana"

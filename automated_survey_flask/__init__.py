@@ -1,6 +1,6 @@
 from automated_survey_flask.config import config_env_files
 from flask import Flask
-
+# from flask_wtf.csrf import CSRFProtect # 1. Import the protector
 from flask_sqlalchemy import SQLAlchemy
 import os
 # db = SQLAlchemy()
@@ -13,13 +13,14 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'app.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy()
+# csrf = CSRFProtect(app) # 2. Initialize it here!
 ################ 
 
 def prepare_app(environment=env, p_db=db):
     app.config.from_object(config_env_files[environment])
     p_db.init_app(app)
     # load views by importing them
-    from . import views  # noqa F401
+    from . import views # noqa F401
 
     return app
 
@@ -30,3 +31,4 @@ def save_and_commit(item):
 
 
 db.save = save_and_commit
+

@@ -1,0 +1,45 @@
+{
+    "questions": [
+      {
+        "body": "Hallo {}, ich bin es, 'Emolter'. Wie läuft dein Tag bisher?",
+        "type": "voice"
+      },
+      {
+        "body": "Bedanke dich bei fünf Menschen, die dir heute geholfen oder dich erfreut haben.",
+        "type": "voice"
+      },
+      {
+        "body": "Was ist das Beste, was du heute getan hast oder noch tun möchtest?",
+        "type": "voice"
+      }
+    ],
+    "messages": [
+      {
+        "body": "Entschuldigung, ich habe die Antwort nicht verstanden. Auf Wiedersehen und danke!",
+        "type": "voice",
+        "message": "sorry_failed" 
+      },
+      {
+        "body": "Du hast gesagt: '{}'",
+        "type": "voice",
+        "message": "you_said"
+      },
+      {
+        "body": "Vielen Dank für deine Antwort. Es folgen später weitere Fragen. Auf Wiedersehen und einen schönen Tag noch!",
+        "type": "voice",
+        "message": "thanks"
+      },
+      {
+        "body": "Guten Tag, eMolter am Apparat.",
+        "type": "voice",
+        "message": "hello"
+      }
+    ],
+    "title": "eMolter voice Survey",
+    "config": [
+      {
+        "body": "Google.de-DE-Wavenet-B",
+        "message": "voice_algo"
+      }
+    ]
+  }

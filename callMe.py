@@ -7,6 +7,7 @@ parser = argparse.ArgumentParser(description="eMolter Call Traigger")
 parser.add_argument("--phone", help = "The target phone number", required = True)
 parser.add_argument("--lang", help = "The language to talk", required = True)
 parser.add_argument("--name", help = "The patient nik name", required = True)
+parser.add_argument("--batch", help = "The patient nik name", required = True)
 
 def initiate_survey_call():
     """
@@ -42,10 +43,11 @@ def initiate_survey_call():
     # 3. Initiation Command: The 'url' parameter is the endpoint Twilio will hit for TwiML instructions
     try:
         patientName = urllib.parse.quote(args.name)
+        batch = args.batch
         call = client.calls.create(
             to=YOUR_NUMBER,
             from_=TWILIO_NUMBER,
-            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}', # Assumes your TwiML route is /voice
+            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}', # Assumes your TwiML route is /voice
             record=True,
             recording_channels='dual'
         )
