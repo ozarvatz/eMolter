@@ -7,6 +7,7 @@ from twilio.rest import Client
 import os
 from pathlib import Path
 import json
+from urllib.parse import quote
 # from . import csrf
 # from flask_wtf.csrf import CSRFProtect
 
@@ -19,7 +20,7 @@ HELLO           = 4
 VOICE_ALGO      = 1
 
 #PACH
-BASE_URL        = "https://expectative-refugio-bizarrely.ngrok-free.dev"
+# BASE_URL        = "https://expectative-refugio-bizarrely.ngrok-free.dev"
 """
 Recommended Voices for a Strong German Accent:
 Voice Engine	Gender	Style	TwiML Name
@@ -41,33 +42,21 @@ def voice_survey():
     print(f"param current questionID = {current_questionId}")
     """TwiML endpoint that asks the first question using Speech Recognition."""
     response = VoiceResponse()
-    # response.record(
-    #     #recording_status_callback=f'{BASE_URL}/handle-recording-log?lang={lang}&name=noname&batch={batch}&questionId={current_questionId}',
-    #     recording_channels='dual', # Crucial for Prosody
-    #     recording_status_callback=f'{BASE_URL}/handle-recording-log?name={patientName}',
-    #     # action='/ignore-this-path' # Record needs an action or it might loop
+   
+    
+    # gather = Gather(
+    #     input='speech',
+    #     speech_timeout='auto', # 'auto' is faster than a fixed '2'
+    #     language=f'{lang}',
+    #     action=f'/handle-speech?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
+    #     method='POST',
+    #     # This tells Twilio to record the speech but NOT wait for transcription
+    #     #record='record-from-answer'
+    #     # This creates a separate recording for JUST this gather
+    #     recording_track='outbound_track',
+    #     enhanced=True,
     # )
-    # ✅ NEW CODE: GATHERING SPEECH
-    gather = Gather(
-        input='speech', # Set input type to speech
-        speech_timeout='2', #'auto', # Automatically ends listening when speech stops
-        language=f'{lang}', #'iw-IL', #'en-US',
-        # voice='Google.he-IL-Standard-A',
-        # hints='שלום, להתראות, סיום, הכל טוב, גרוע, בסדר, מצוין', # Add Hebrew hints here
-        # speech_model='telephony', #'experimental_conversations', # Try this model
-        # enhanced=True,
-        barge_in=False,
-        
-        record='record-from-answer-dual', 
-        recording_status_callback=f'{BASE_URL}/handle-recording-log?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
-        
-        action=f'/handle-speech?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
-        method='POST'
-        # action="https://expectative-refugio-bizarrely.ngrok-free.dev/handle-speech" # New route to handle the text result
-
-    )
-    
-    
+    # response.append(gather)
     print("*******before******")
     voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
     print(f"voice_model = {voice_model}")
@@ -81,7 +70,8 @@ def voice_survey():
         if 1 == current_questionId:
             current_question_txt = current_question_txt.format(patientName)
             hello_text_msg = read_question_from_json(lang, batch, HELLO, "messages")
-            gather.say(
+            #gather.say(
+            response.say(
                 hello_text_msg,
                 language=f'{lang}', #'iw-IL'
                 voice=voice_model #'Google.he-IL-Standard-A'
@@ -91,8 +81,9 @@ def voice_survey():
         print(f"error in read file {e}")
     
     
-
-    gather.say(
+    
+    #gather.say(
+    response.say(
         current_question_txt, 
         language=f'{lang}', #'iw-IL'
         voice=voice_model #'Google.he-IL-Standard-A'
@@ -100,8 +91,33 @@ def voice_survey():
         # speech_model='experimental_conversations' # Try this model
     )
     
+    
+    base_url = request.url_root.rstrip('/')
+    base_url = base_url.replace("http://", "https://")
+    print(f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}')
+    response.record(
+        action=f'/handle-speech?lang={lang}&name={quote(patientName)}&batch={batch}&questionId={current_questionId}',
+        method='POST',
+        play_beep=True,
+        timeout=2,           # Stops recording after 2 seconds of silence
+        # max_length=15,       # Limits the answer length
+        transcribe=True,     # KEY: Disabling this removes the 15-second delay
+        language='he-IL',
+        # Twilio will send the text here whenever it is ready
+        #transcription_callback=f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}'
+        #transcription_czallback=f'https://expectative-refugio-bizarrely.ngrok-free.dev/handle-transcription?questionId={current_questionId}',
+        transcribe_callback=f'http://188.166.110.236:5000/handle-transcription?questionId={current_questionId}',
+    )
+    # response.record(
+    #     action=f'/handle-speech?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
+    #     method='POST',
+    #     play_beep=True,
+    #     timeout=3,      # Seconds of silence before stopping
+    #     transcribe=True # This tells Twilio to turn the audio into text
+    # )
+
     sorry_failed = read_question_from_json(lang, batch, SORRY_FAILED, "messages")
-    response.append(gather)
+    # response.append(gather)
     response.say(
         sorry_failed,
         language=f'{lang}', #'iw-IL'
@@ -160,20 +176,27 @@ def sms_survey():
     return str(response)
 
 
-@app.route("/handle-speech", methods=['POST'])
+@app.route("/handle-speech", methods=['POST', 'GET'])
 def handle_speech():
     lang = request.args.get('lang') or session.get('lang') or 'iw-IL'
     batch = request.args.get('batch') or session.get('batch') or 'basic'
     patientName = request.args.get('name') or session.get('name') or 'noname'
     current_questionId = int(request.args.get('questionId', 2)) or int(session.get('questionId')) or 2
+    recording_url = request.form.get('RecordingUrl')
+    recording_sid = request.form.get('RecordingSid')
+    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
     print("############# handle_speech ##############")
     print(f"session lunguage = {lang}")
+    print(f"RecordingUrl: {recording_url}")
+    print(f"RecordingSid: {recording_sid}")
+    print(f"Twilio Account SID: {account_sid}")
     print(f"session questionId = {current_questionId}")
     print(f"session questionId type = {type(current_questionId)}")
 
     """Endpoint that receives the recognized text from Twilio."""
     # Twilio sends the recognized text in the 'SpeechResult' parameter
-    speech_result = request.form.get('SpeechResult', '').lower()
+    #speech_result = request.form.get('SpeechResult', '').lower()
+    # speech_result = request.form.get('TranscriptionText', '').lower()
     patient_phone = request.form.get('To','') 
         
     # print("\n--- Form Data (Twilio sends data here) ---")
@@ -181,25 +204,24 @@ def handle_speech():
     #     print(f"{key}: {value}")
 
     # DEBUG: Print the type and the raw value
-    print(f"speech result: {speech_result}")
     print(f"patient phone: {patient_phone}")
-    print(f"Type: {type(speech_result)}")
 
     response = VoiceResponse()
     
-    you_said = read_question_from_json(lang, batch, YOU_SAID, "messages")
+    
     voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
-    response.say(
-        you_said.format(speech_result),
-        language=f'{lang}', #'iw-IL'
-        voice=voice_model #'Google.he-IL-Standard-A'
-    )
+    # you_said = read_question_from_json(lang, batch, YOU_SAID, "messages")
+    # response.say(
+    #     you_said.format(speech_result),
+    #     language=f'{lang}', #'iw-IL'
+    #     voice=voice_model #'Google.he-IL-Standard-A'
+    # )
 
     next_questionId = current_questionId + 1
     try:
         read_question_from_json(lang, batch, next_questionId, "questions")
         # next_url = url_for('voice', questionId=next_questionId, lang=lang )
-        next_url = f"/voice?lang={lang}&questionId={next_questionId}&name={patientName}&batch={batch}"
+        next_url = f"/voice?lang={lang}&questionId={next_questionId}&name={quote(patientName)}&batch={batch}"
         print(f"new Url: {next_url}")
         response.redirect(next_url)
     except Exception as e:
@@ -247,6 +269,21 @@ def handle_recording_log():
 
     return "", 200 # Twilio just needs a 200 OK
 
+@app.route("/handle-transcription", methods=['GET','POST'])
+def handle_transcription():
+    # This is where the text arrives 5-10 seconds later
+    call_sid = request.values.get('CallSid')
+    speech_text = request.form.get('TranscriptionText')
+    recording_sid = request.form.get('RecordingSid')
+    
+    print(f"BACKGROUND PROCESS: Text for call {call_sid}, recording {recording_sid} is: {speech_text}")
+    
+    # Update your database record where RecordingSid matches
+    # survey_entry = Survey.query.filter_by(recording_sid=recording_sid).first()
+    # survey_entry.text_answer = speech_text
+    # db.session.commit()
+
+    return '', 204 # Return empty success response to Twilio
 def redirect_to_first_question(response, survey):
     first_question = survey.questions.order_by('id').first()
     first_question_url = url_for('question', question_id=first_question.id)
