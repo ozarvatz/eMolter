@@ -1,0 +1,53 @@
+{
+    "questions": [
+      {
+        "body": "Hallo {}, hier ist Molty.",
+        "type": "voice"
+      },
+      {
+        "body": "Geht es Ihnen gut?",
+        "type": "voice"
+      },
+      {
+        "body": "Haben Sie das Gefühl, Energie zu haben?",
+        "type": "voice"
+      },
+      {
+        "body": "Wie ist der heutige Tag im Vergleich zu gestern?",
+        "type": "voice"
+      },
+      {
+        "body": "Werden Sie heute noch ausgehen?",
+        "type": "voice"
+      }
+    ],
+    "messages": [
+      {
+        "body": "Entschuldigung, ich habe die Antwort nicht verstanden. Auf Wiedersehen und danke!",
+        "type": "voice",
+        "message": "sorry_failed" 
+      },
+      {
+        "body": "Du hast gesagt: '{}'",
+        "type": "voice",
+        "message": "you_said"
+      },
+      {
+        "body": "Vielen Dank für deine Antwort. Es folgen später weitere Fragen. Auf Wiedersehen und einen schönen Tag noch!",
+        "type": "voice",
+        "message": "thanks"
+      },
+      {
+        "body": "Guten Tag, eMolter am Apparat.",
+        "type": "voice",
+        "message": "hello"
+      }
+    ],
+    "title": "eMolter voice Survey",
+    "config": [
+      {
+        "body": "Google.de-DE-Wavenet-B",
+        "message": "voice_algo"
+      }
+    ]
+  }

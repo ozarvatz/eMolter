@@ -68,7 +68,7 @@ class Patient(db.Model):
     phone = db.Column(db.String(20), unique=True, nullable=False)
     language = db.Column(db.String(10), nullable=False)
     calls = db.relationship('Call', backref='patient', lazy=True)
-    def __init__(self, name, phone_number, language='iw-IL'):
+    def __init__(self, name, phone_number, language='he-IL'):
         self.name = name
         self.phone_number = phone_number
         self.language = language

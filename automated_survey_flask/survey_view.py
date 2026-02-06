@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 import json
 from urllib.parse import quote
+from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Start, Transcription
+
+
 # from . import csrf
 # from flask_wtf.csrf import CSRFProtect
 
@@ -21,6 +24,18 @@ VOICE_ALGO      = 1
 
 #PACH
 # BASE_URL        = "https://expectative-refugio-bizarrely.ngrok-free.dev"
+
+# 1. Access the exported environment variables
+account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+
+# 2. Safety check: Ensure the variables aren't empty
+if not account_sid or not auth_token:
+    raise ValueError("Missing Twilio credentials. Did you remember to 'export' them in this terminal session?")
+
+# 3. Initialize the Client
+client = Client(account_sid, auth_token)
+
 """
 Recommended Voices for a Strong German Accent:
 Voice Engine	Gender	Style	TwiML Name
@@ -30,19 +45,31 @@ Google Standard	Female	Clean/Direct	Google.de-DE-Standard-F
 """
 @app.route('/voice', methods=['GET', 'POST'])
 def voice_survey():
-    lang = request.args.get('lang') or session.get('lang') or 'iw-IL'
+    lang = request.args.get('lang') or session.get('lang') or 'he-IL'
     patientName = request.args.get('name') or session.get('name') or 'noname'
     batch = request.args.get('batch') or session.get('batch') or 'basic'
     current_questionId = int(request.args.get('questionId', 1)) or int(session.get('questionId')) or 1
     call_sid = request.values.get('CallSid')
-   
+
+    from_phone = request.args.get('from_phone')
+    to_phone = request.args.get('to_phone')
+    
     print(f"param lunguage = {lang}")
     print(f"param patient name = {patientName}")
     print(f"param batch = {batch}")
     print(f"param current questionID = {current_questionId}")
+    print(f'from_phone = {from_phone}, to_phone = {to_phone}')
     """TwiML endpoint that asks the first question using Speech Recognition."""
     response = VoiceResponse()
-   
+    
+    # 1. Start a "Listener" that understands Hebrew/German
+    # This runs in the background while the recording happens
+    start = Start()
+    start.transcription(
+        language_code=lang, 
+        status_callback_url=f'http://{request.host}/handle-realtime-text?questionId={current_questionId}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
+    )
+    response.append(start)
     
     # gather = Gather(
     #     input='speech',
@@ -73,7 +100,7 @@ def voice_survey():
             #gather.say(
             response.say(
                 hello_text_msg,
-                language=f'{lang}', #'iw-IL'
+                language=f'{lang}',
                 voice=voice_model #'Google.he-IL-Standard-A'
             )
         print(f"first question: {current_question_txt}")
@@ -85,7 +112,7 @@ def voice_survey():
     #gather.say(
     response.say(
         current_question_txt, 
-        language=f'{lang}', #'iw-IL'
+        language=f'{lang}', 
         voice=voice_model #'Google.he-IL-Standard-A'
         # hints='שלום, להתראות, סיום, הכל טוב, גרוע, בסדר, מצוין', # Add Hebrew hints here
         # speech_model='experimental_conversations' # Try this model
@@ -101,12 +128,12 @@ def voice_survey():
         play_beep=True,
         timeout=2,           # Stops recording after 2 seconds of silence
         # max_length=15,       # Limits the answer length
-        transcribe=True,     # KEY: Disabling this removes the 15-second delay
-        language='he-IL',
+        transcribe=False,     # KEY: Disabling this removes the 15-second delay
+        # language='he-IL',
         # Twilio will send the text here whenever it is ready
         #transcription_callback=f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}'
         #transcription_czallback=f'https://expectative-refugio-bizarrely.ngrok-free.dev/handle-transcription?questionId={current_questionId}',
-        transcribe_callback=f'http://188.166.110.236:5000/handle-transcription?questionId={current_questionId}',
+        # transcribe_callback=f'http://188.166.110.236:5000/handle-transcription?questionId={current_questionId}',
     )
     # response.record(
     #     action=f'/handle-speech?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
@@ -120,7 +147,7 @@ def voice_survey():
     # response.append(gather)
     response.say(
         sorry_failed,
-        language=f'{lang}', #'iw-IL'
+        language=f'{lang}',
         voice=voice_model #'Google.he-IL-Standard-A'  
     )
     response.hangup()
@@ -178,7 +205,7 @@ def sms_survey():
 
 @app.route("/handle-speech", methods=['POST', 'GET'])
 def handle_speech():
-    lang = request.args.get('lang') or session.get('lang') or 'iw-IL'
+    lang = request.args.get('lang') or session.get('lang') or 'he-IL'
     batch = request.args.get('batch') or session.get('batch') or 'basic'
     patientName = request.args.get('name') or session.get('name') or 'noname'
     current_questionId = int(request.args.get('questionId', 2)) or int(session.get('questionId')) or 2
@@ -187,11 +214,10 @@ def handle_speech():
     account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
     print("############# handle_speech ##############")
     print(f"session lunguage = {lang}")
-    print(f"RecordingUrl: {recording_url}")
+    print(f"RecordingUrl: {recording_url}.wav")
     print(f"RecordingSid: {recording_sid}")
     print(f"Twilio Account SID: {account_sid}")
     print(f"session questionId = {current_questionId}")
-    print(f"session questionId type = {type(current_questionId)}")
 
     """Endpoint that receives the recognized text from Twilio."""
     # Twilio sends the recognized text in the 'SpeechResult' parameter
@@ -213,7 +239,7 @@ def handle_speech():
     # you_said = read_question_from_json(lang, batch, YOU_SAID, "messages")
     # response.say(
     #     you_said.format(speech_result),
-    #     language=f'{lang}', #'iw-IL'
+    #     language=f'{lang}',
     #     voice=voice_model #'Google.he-IL-Standard-A'
     # )
 
@@ -229,7 +255,7 @@ def handle_speech():
         thanks = read_question_from_json(lang, batch, THANKS, "messages")
         response.say(
             thanks,
-            language=f'{lang}', #'iw-IL'
+            language=f'{lang}', 
             voice=voice_model #'Google.he-IL-Standard-A'
         )
         response.hangup()
@@ -237,7 +263,7 @@ def handle_speech():
     # if 'סיום' in speech_result or 'סוף' in speech_result or 'end' in speech_result:
     #     response.say(
     #         "הבנתי שברצונך לסיים. שלום ויום טוב",
-    #         language=f'{lang}', #'iw-IL'
+    #         language=f'{lang}',
     #         voice='Google.he-IL-Standard-A'
     #     )
     #     response.hangup() 
@@ -284,6 +310,71 @@ def handle_transcription():
     # db.session.commit()
 
     return '', 204 # Return empty success response to Twilio
+
+import json
+
+@app.route('/handle-realtime-text', methods=['POST'])
+def handle_realtime_text():
+    # patient_phone = request.form.get('To','') 
+    # twillio_phone = request.form.get('From','') 
+    patient_phone = request.values.get('to_phone') 
+    twillio_phone = request.values.get('from_phone')
+    print(f"from: {twillio_phone}, to: {patient_phone}")
+    
+    # Get the raw string data
+    raw_data = request.form.get('TranscriptionData') # Verify the field name from Twilio
+    print(f"THE DATA :::::::::::::: {raw_data}")
+    try:
+        # Convert the string to a dictionary
+        transcription_data = json.loads(raw_data)
+        speech_text = transcription_data.get('transcript')
+        if speech_text:
+            message_sid = send_survey_summary(twillio_phone, patient_phone, speech_text)
+            print(f"============twilio: {twillio_phone}, patient: {patient_phone}, YOU SAY - TEXT {speech_text}")  
+
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        # Fallback if it's already a dict or if it's empty
+        speech_text = raw_data 
+
+    # Rest of your logic...
+    # add the text to the specific line in the call data file.
+
+
+    return '', 200
+
+def send_survey_summary(from_number, to_number, questions_or_answers):
+    # Format the body of the message
+    # WhatsApp supports Hebrew characters and RTL (Right-to-Left) natively.
+    if not is_basic_valid(from_number):
+        from_number = from_number.strip()
+        from_number = '+' + from_number
+    if not is_basic_valid(to_number):
+        to_number = to_number.strip()
+        to_number = '+' + to_number
+        
+    if is_basic_valid(from_number) and is_basic_valid(to_number):    
+        message = client.messages.create(
+            from_=f'{from_number}',  # Your Twilio WhatsApp Number
+            body=questions_or_answers,
+            to=f'{to_number}'      # The participant's number in E.164 format
+        )
+        return message.sid
+    else:
+        print(f"numbers are not valid - from_number {from_number}, to_number {to_number}")
+
+
+    return None
+
+def is_basic_valid(phone_number):
+    # Remove any accidental spaces
+    phone = phone_number.strip()
+    
+    # Check if starts with + and has enough digits (min 10 for Israel)
+    if phone.startswith('+') and len(phone) >= 10 and phone[1:].isdigit():
+        return True
+    return False
+##########################
+
 def redirect_to_first_question(response, survey):
     first_question = survey.questions.order_by('id').first()
     first_question_url = url_for('question', question_id=first_question.id)

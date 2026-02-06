@@ -47,7 +47,7 @@ def seed_patients():
             new_patient = Patient(
                 name=p['name'],
                 phone=p['phone'],
-                language=p.get('language', 'iw-IL')
+                language=p.get('language', 'he-IL')
             )
             db.session.add(new_patient)
     

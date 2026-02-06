@@ -33,8 +33,8 @@ def initiate_survey_call():
     YOUR_NUMBER = args.phone
     # YOUR_NUMBER = "+972503220778"  #OZ ⬅️ The number you want to call
     # YOUR_NUMBER = "+972546646637"  #Seev ⬅️ The number you want to call
-    NGROK_URL = "https://expectative-refugio-bizarrely.ngrok-free.dev" # ⬅️ Your live Ngrok URL
-    
+    #NGROK_URL = "https://expectative-refugio-bizarrely.ngrok-free.dev" # ⬅️ Your live Ngrok URL
+    NGROK_URL = "http://188.166.110.236:5000"
     # Check for placeholder values
     if TWILIO_NUMBER.startswith("+[") or YOUR_NUMBER.startswith("+[") or "NGROK_ID" in NGROK_URL:
         print("🛑 Error: Please update the TWILIO_NUMBER, YOUR_NUMBER, and NGROK_URL variables in the script.")
@@ -47,7 +47,8 @@ def initiate_survey_call():
         call = client.calls.create(
             to=YOUR_NUMBER,
             from_=TWILIO_NUMBER,
-            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}', # Assumes your TwiML route is /voice
+            # url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&to_phone={YOUR_NUMBER}&from_phone={TWILIO_NUMBER}', # Assumes your TwiML route is /voice
+            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&to_phone={urllib.parse.quote(YOUR_NUMBER)}&from_phone={urllib.parse.quote(TWILIO_NUMBER)}', # Assumes your TwiML route is /voice
             record=True,
             recording_channels='dual'
         )
