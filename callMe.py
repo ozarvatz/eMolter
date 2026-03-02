@@ -2,6 +2,8 @@ from twilio.rest import Client
 import os
 import argparse
 import  urllib.parse
+from automated_survey_flask import app
+from automated_survey_flask.models import db, Call
 
 parser = argparse.ArgumentParser(description="eMolter Call Traigger")
 parser.add_argument("--phone", help = "The target phone number", required = True)
@@ -29,7 +31,7 @@ def initiate_survey_call():
 
     # 2. ⚠️ IMPORTANT: Fill in your actual numbers and the Ngrok URL here ⚠️
     # Numbers must be in E.164 format (e.g., +15551234567)
-    TWILIO_NUMBER = "+17473023043" # ⬅️ Your purchased Twilio phone number
+    TWILIO_NUMBER = "+17473023043" # ⬅️ Your purchased Twlio phone number
     YOUR_NUMBER = args.phone
     # YOUR_NUMBER = "+972503220778"  #OZ ⬅️ The number you want to call
     # YOUR_NUMBER = "+972546646637"  #Seev ⬅️ The number you want to call
@@ -40,6 +42,7 @@ def initiate_survey_call():
         print("🛑 Error: Please update the TWILIO_NUMBER, YOUR_NUMBER, and NGROK_URL variables in the script.")
         return
 
+    
     # 3. Initiation Command: The 'url' parameter is the endpoint Twilio will hit for TwiML instructions
     try:
         patientName = urllib.parse.quote(args.name)
@@ -48,14 +51,29 @@ def initiate_survey_call():
             to=YOUR_NUMBER,
             from_=TWILIO_NUMBER,
             # url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&to_phone={YOUR_NUMBER}&from_phone={TWILIO_NUMBER}', # Assumes your TwiML route is /voice
-            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&to_phone={urllib.parse.quote(YOUR_NUMBER)}&from_phone={urllib.parse.quote(TWILIO_NUMBER)}', # Assumes your TwiML route is /voice
+            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&questionId=1&to_phone={urllib.parse.quote(YOUR_NUMBER)}&from_phone={urllib.parse.quote(TWILIO_NUMBER)}', # Assumes your TwiML route is /voice
             record=True,
             recording_channels='dual'
         )
         print(f"🎉 Call initiated successfully to {YOUR_NUMBER}.")
         print(f"Twilio SID: {call.sid}")
         print("Twilio will now connect to your Flask server's Ngrok URL.")
-        
+        with app.app_context():
+            db.init_app(app)
+            questions_file = f"questions_{batch}_{args.lang}.json"
+            call_snippet = Call(
+                callSid=call.sid,
+                recordSid=None,
+                questionId=1,
+                recordingUrl="",
+                conversationText="", 
+                patientPhone=YOUR_NUMBER,
+                carrierPhone=TWILIO_NUMBER,
+                questionsFile=questions_file,
+            )
+            db.session.add(call_snippet)
+            db.session.commit()  
+            print("✅ Database record created.")
     except Exception as e:
         print(f"🛑 Call failed: {e}")
         print("Check your Twilio credentials, number formats, and Twilio trial settings.")

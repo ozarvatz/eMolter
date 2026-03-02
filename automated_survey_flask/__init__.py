@@ -9,9 +9,11 @@ env = app.config.get("ENV", "production")
 app.secret_key = '123456qwertyasdfghzxcvbn1qaz2wsx3edc4rfv5tgb6yhn' # Use a random string
 
 ################
-basedir = os.path.abspath(os.path.dirname(__file__))
+#basedir = os.path.abspath(os.path.dirname(__file__))
+basedir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'app.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ECHO'] = True
 db = SQLAlchemy()
 # csrf = CSRFProtect(app) # 2. Initialize it here!
 ################ 

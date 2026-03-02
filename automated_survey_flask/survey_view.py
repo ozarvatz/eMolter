@@ -9,7 +9,9 @@ from pathlib import Path
 import json
 from urllib.parse import quote
 from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Start, Transcription
-
+from automated_survey_flask.models import db, Call
+from datetime import datetime
+import re
 
 # from . import csrf
 # from flask_wtf.csrf import CSRFProtect
@@ -48,12 +50,13 @@ def voice_survey():
     lang = request.args.get('lang') or session.get('lang') or 'he-IL'
     patientName = request.args.get('name') or session.get('name') or 'noname'
     batch = request.args.get('batch') or session.get('batch') or 'basic'
-    current_questionId = int(request.args.get('questionId', 1)) or int(session.get('questionId')) or 1
+    current_questionId = int(request.args.get('questionId')) or int(session.get('questionId')) or 1
     call_sid = request.values.get('CallSid')
 
     from_phone = request.args.get('from_phone')
     to_phone = request.args.get('to_phone')
-    
+    print(f'++++++++++++++voice {datetime.now()} ++++++++++++++')
+    print(f"voice dtae time {datetime.now()}")
     print(f"param lunguage = {lang}")
     print(f"param patient name = {patientName}")
     print(f"param batch = {batch}")
@@ -62,14 +65,15 @@ def voice_survey():
     """TwiML endpoint that asks the first question using Speech Recognition."""
     response = VoiceResponse()
     
-    # 1. Start a "Listener" that understands Hebrew/German
-    # This runs in the background while the recording happens
-    start = Start()
-    start.transcription(
-        language_code=lang, 
-        status_callback_url=f'http://{request.host}/handle-realtime-text?questionId={current_questionId}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
-    )
-    response.append(start)
+    if 1 == current_questionId:
+        # 1. Start a "Listener" that understands Hebrew/German
+        # This runs in the background while the recording happens
+        start = Start()
+        start.transcription(
+            language_code=lang, 
+            status_callback_url=f'http://{request.host}/handle-realtime-text?batch={batch}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
+        )
+        response.append(start)
     
     # gather = Gather(
     #     input='speech',
@@ -84,7 +88,7 @@ def voice_survey():
     #     enhanced=True,
     # )
     # response.append(gather)
-    print("*******before******")
+    print(f"*******before {datetime.now()} ******")
     voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
     print(f"voice_model = {voice_model}")
     print(f"call sid: {call_sid}")
@@ -103,7 +107,7 @@ def voice_survey():
                 language=f'{lang}',
                 voice=voice_model #'Google.he-IL-Standard-A'
             )
-        print(f"first question: {current_question_txt}")
+        print(f"    question: {current_question_txt}")
     except Exception as e:
         print(f"error in read file {e}")
     
@@ -121,7 +125,7 @@ def voice_survey():
     
     base_url = request.url_root.rstrip('/')
     base_url = base_url.replace("http://", "https://")
-    print(f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}')
+    # print(f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}')
     response.record(
         action=f'/handle-speech?lang={lang}&name={quote(patientName)}&batch={batch}&questionId={current_questionId}',
         method='POST',
@@ -208,32 +212,50 @@ def handle_speech():
     lang = request.args.get('lang') or session.get('lang') or 'he-IL'
     batch = request.args.get('batch') or session.get('batch') or 'basic'
     patientName = request.args.get('name') or session.get('name') or 'noname'
-    current_questionId = int(request.args.get('questionId', 2)) or int(session.get('questionId')) or 2
-    recording_url = request.form.get('RecordingUrl')
+    current_questionId = int(request.args.get('questionId')) or int(session.get('questionId')) or 2
+    recording_url = request.form.get('RecordingUrl') + ".wav"
     recording_sid = request.form.get('RecordingSid')
     account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
-    print("############# handle_speech ##############")
+    call_sid = request.form.get('CallSid')
+    patient_phone = fixPhoneNumber(request.form.get('To',''))
+    carrier_phone = fixPhoneNumber(request.form.get('From',''))
+    
+    print(f"############# handle_speech {datetime.now()}##############")
     print(f"session lunguage = {lang}")
     print(f"RecordingUrl: {recording_url}.wav")
     print(f"RecordingSid: {recording_sid}")
     print(f"Twilio Account SID: {account_sid}")
     print(f"session questionId = {current_questionId}")
-
-    """Endpoint that receives the recognized text from Twilio."""
-    # Twilio sends the recognized text in the 'SpeechResult' parameter
-    #speech_result = request.form.get('SpeechResult', '').lower()
-    # speech_result = request.form.get('TranscriptionText', '').lower()
-    patient_phone = request.form.get('To','') 
-        
-    # print("\n--- Form Data (Twilio sends data here) ---")
-    # for key, value in request.form.items():
-    #     print(f"{key}: {value}")
-
-    # DEBUG: Print the type and the raw value
+    print(f"call sid: {call_sid}")
     print(f"patient phone: {patient_phone}")
+    print(f"carrier phone: {carrier_phone}")
 
-    response = VoiceResponse()
+# insert DB record
+    call_snippet = Call.query.filter_by(call_sid=call_sid, question_id=current_questionId).first()
+    questions_file = f"questions_{batch}_{lang}.json"
+    if call_snippet:
+        print(f"Updating existing stub for Question {current_questionId}")
+        call_snippet.record_sid = recording_sid
+        call_snippet.recording_url = recording_url
+        call_snippet.questions_file = questions_file
+        call_snippet.patient_phone = patient_phone
+        call_snippet.carrier_phone = carrier_phone
+    else:
+        # 3. Create a NEW row for this specific recording snippet
+        call_snippet = Call(
+            callSid=call_sid,
+            recordSid=recording_sid,
+            questionId=current_questionId,
+            recordingUrl=recording_url,
+            conversationText="", 
+            patientPhone=patient_phone,
+            carrierPhone=carrier_phone,
+            questionsFile=questions_file,
+        )
+        db.session.add(call_snippet)
+    db.session.commit()
     
+    response = VoiceResponse()
     
     voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
     # you_said = read_question_from_json(lang, batch, YOU_SAID, "messages")
@@ -271,55 +293,22 @@ def handle_speech():
 
     return str(response)
 
-@app.route("/handle-recording-log", methods=['POST'])
-# @csrf.exempt
-def handle_recording_log():
-    # 1. Get Params from the URL and Twilio Body
-    print("########################### the germans got there!!!!!!!!!!!!!!!")
-    call_sid = request.values.get('CallSid')
-    recording_sid = request.values.get('RecordingSid')
-    recording_url = request.values.get('RecordingUrl') # The link to the audio
-    
-    lang = request.args.get('lang')
-    patient_name = request.args.get('name')
-    question_id = request.args.get('questionId')
 
-    # 2. Format the line for your file
-    # We append '.wav' to the RecordingUrl for high-quality prosody audio
-    log_entry = f"{call_sid}|{recording_sid}|{patient_name}|Q{question_id}|{recording_url}.wav\n"
-
-    # 3. Append to your file
-    file_path = Path(__file__).parent.resolve() / "prosody_tasks.txt"
-    with open(file_path, "a", encoding='utf-8') as f:
-        f.write(log_entry)
-
-    return "", 200 # Twilio just needs a 200 OK
-
-@app.route("/handle-transcription", methods=['GET','POST'])
-def handle_transcription():
-    # This is where the text arrives 5-10 seconds later
-    call_sid = request.values.get('CallSid')
-    speech_text = request.form.get('TranscriptionText')
-    recording_sid = request.form.get('RecordingSid')
-    
-    print(f"BACKGROUND PROCESS: Text for call {call_sid}, recording {recording_sid} is: {speech_text}")
-    
-    # Update your database record where RecordingSid matches
-    # survey_entry = Survey.query.filter_by(recording_sid=recording_sid).first()
-    # survey_entry.text_answer = speech_text
-    # db.session.commit()
-
-    return '', 204 # Return empty success response to Twilio
-
-import json
 
 @app.route('/handle-realtime-text', methods=['POST'])
 def handle_realtime_text():
     # patient_phone = request.form.get('To','') 
     # twillio_phone = request.form.get('From','') 
-    patient_phone = request.values.get('to_phone') 
+    patient_phone = request.values.get('to_phone')
     twillio_phone = request.values.get('from_phone')
+    question_id = request.values.get('questionId')
+    batch = request.values.get('batch')
+    lang = request.values.get('lang')
+    call_sid = request.values.get('CallSid')
+
+    print(f"=============handle-realtime-text {datetime.now()} ============")
     print(f"from: {twillio_phone}, to: {patient_phone}")
+    print(f'call sid: {call_sid}, question Id: {question_id}')
     
     # Get the raw string data
     raw_data = request.form.get('TranscriptionData') # Verify the field name from Twilio
@@ -330,7 +319,38 @@ def handle_realtime_text():
         speech_text = transcription_data.get('transcript')
         if speech_text:
             message_sid = send_survey_summary(twillio_phone, patient_phone, speech_text)
+            patient_phone = fixPhoneNumber(patient_phone)
+            twillio_phone = fixPhoneNumber(twillio_phone)
             print(f"============twilio: {twillio_phone}, patient: {patient_phone}, YOU SAY - TEXT {speech_text}")  
+            # call_snippet = Call.query.filter_by(call_sid=call_sid, question_id=question_id).first()
+            call_snippet = Call.query.filter_by(call_sid=call_sid)\
+                .order_by(Call.question_id.desc())\
+                .first()
+            
+            if call_snippet:
+                # hear i want to upda  te conversation_text in db call_snippet
+                call_snippet.conversation_text = (call_snippet.conversation_text or "") + f" {speech_text}"
+                if patient_phone and len(patient_phone) > 1:
+                    call_snippet.patient_phone = patient_phone
+                if twillio_phone and len(twillio_phone) > 1:
+                    call_snippet.carrier_phone = twillio_phone
+                question_id = call_snippet.question_id
+                
+                print(f"update call row, call sid: {call_sid}, question Id: {question_id}")
+            else:
+                call_record = Call(
+                    callSid=call_sid,
+                    recordSid=None, # To be updated by handle-speech
+                    questionId=question_id,
+                    recordingUrl=None,
+                    conversationText=speech_text,
+                    patientPhone=patient_phone,
+                    carrierPhone=twillio_phone,
+                    questionsFile=f"questions_{batch}_{lang}.json",
+                )
+                db.session.add(call_record)
+
+            db.session.commit()
 
     except (json.JSONDecodeError, AttributeError, TypeError):
         # Fallback if it's already a dict or if it's empty
@@ -385,6 +405,11 @@ def welcome_user(survey, send_function):
     welcome_text = 'Welcome to the %s' % survey.title
     send_function(welcome_text)
 
+def fixPhoneNumber(phone_number):
+    number = re.sub(r'\D', '', phone_number)
+    if not number: 
+        return number
+    return f"+{number}"
 
 def survey_error(survey, send_function):
     if not survey:
