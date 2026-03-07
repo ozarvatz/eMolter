@@ -18,6 +18,7 @@ def parse_voice_report(report_str):
         match = re.search(r'([^:]+):\s+([\d\.]+)', line)
         if match:
             key = match.group(1).strip().lower().replace(" ", "_")
+            key = re.sub(r'[()]', '', key)
             try:
                 data[key] = float(match.group(2))
             except ValueError:
@@ -67,8 +68,8 @@ def get_prosody_features(url, channel_index=1):
 
             # Voice Report (Comprehensive Glottal Analysis)
             # This returns a long string of data about pulses, breaks, and glottal cycles
-            voice_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
-            features["glottal_voice_report"] = voice_report
+            # voice_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
+            # features["glottal_voice_report"] = voice_report
                     
             # --- Formants (Vocal Tract resonance) ---
             formant = sound.to_formant_burg()
