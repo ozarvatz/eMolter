@@ -1,14 +1,13 @@
 from . import app
 from .models import Survey
 from flask import url_for, session, request
-from twilio.twiml.voice_response import VoiceResponse, Gather, Say
+from twilio.twiml.voice_response import VoiceResponse, Response, Gather, Say, Start, Transcription
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 import os
 from pathlib import Path
 import json
 from urllib.parse import quote
-from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Start, Transcription
 from automated_survey_flask.models import db, Call
 from datetime import datetime
 import re
@@ -70,7 +69,8 @@ def voice_survey():
         # This runs in the background while the recording happens
         start = Start()
         start.transcription(
-            language_code=lang, 
+            language_code=f'{lang}', 
+            # language=f'{lang}',
             status_callback_url=f'http://{request.host}/handle-realtime-text?batch={batch}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
         )
         response.append(start)
@@ -102,7 +102,7 @@ def voice_survey():
             current_question_txt = current_question_txt.format(patientName)
             hello_text_msg = read_question_from_json(lang, batch, HELLO, "messages")
             #gather.say(
-            response.say(
+            response.Say(
                 hello_text_msg,
                 language=f'{lang}',
                 voice=voice_model #'Google.he-IL-Standard-A'
@@ -114,7 +114,7 @@ def voice_survey():
     
     
     #gather.say(
-    response.say(
+    response.Say(
         current_question_txt, 
         language=f'{lang}', 
         voice=voice_model #'Google.he-IL-Standard-A'
@@ -129,6 +129,7 @@ def voice_survey():
     response.record(
         action=f'/handle-speech?lang={lang}&name={quote(patientName)}&batch={batch}&questionId={current_questionId}',
         method='POST',
+        # language=f'{lang}',
         play_beep=True,
         timeout=2,           # Stops recording after 2 seconds of silence
         # max_length=15,       # Limits the answer length
@@ -149,14 +150,15 @@ def voice_survey():
 
     sorry_failed = read_question_from_json(lang, batch, SORRY_FAILED, "messages")
     # response.append(gather)
-    response.say(
+    response.Say(
         sorry_failed,
         language=f'{lang}',
         voice=voice_model #'Google.he-IL-Standard-A'  
     )
     response.hangup()
     
-    return str(response)
+    # return str(response)
+    return Response(str(response), mimetype='text/xml')
 
 def read_question_from_json(lang, batch, n, entity):
     app_root = Path(__file__).parent.resolve()
@@ -204,7 +206,8 @@ def sms_survey():
     else:
         welcome_user(survey, response.message)
         redirect_to_first_question(response, survey)
-    return str(response)
+    # return str(response)
+    return Response(str(response), mimetype='text/xml')
 
 
 @app.route("/handle-speech", methods=['POST', 'GET'])
@@ -275,7 +278,7 @@ def handle_speech():
     except Exception as e:
         print(e)
         thanks = read_question_from_json(lang, batch, THANKS, "messages")
-        response.say(
+        response.Say(
             thanks,
             language=f'{lang}', 
             voice=voice_model #'Google.he-IL-Standard-A'
@@ -291,7 +294,7 @@ def handle_speech():
     #     response.hangup() 
     #     return str(response)
 
-    return str(response)
+    return Response(str(response), mimetype='text/xml')
 
 
 

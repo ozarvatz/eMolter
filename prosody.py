@@ -6,6 +6,8 @@ import tempfile
 import os
 import re
 from parselmouth.praat import call
+from automated_survey_flask import app
+from automated_survey_flask.models import db, Call
 
 def parse_voice_report(report_str):
     """Converts the raw Praat text report into a dictionary."""
@@ -67,7 +69,7 @@ def get_prosody_features(url, channel_index=1):
             # This returns a long string of data about pulses, breaks, and glottal cycles
             voice_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
             features["glottal_voice_report"] = voice_report
-            
+                    
             # --- Formants (Vocal Tract resonance) ---
             formant = sound.to_formant_burg()
             features["f1_mean_hz"] = call(formant, "Get mean", 1, 0, 0, "Hertz")
@@ -84,15 +86,29 @@ def get_prosody_features(url, channel_index=1):
                 os.remove(tmp_path)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python prosody.py <URL> [channel_index]")
-        sys.exit(1)
-
-    url_arg = sys.argv[1]
-    ch = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-    
-    try:
-        results = get_prosody_features(url_arg, ch)
-        print(json.dumps(results, indent=4))
-    except Exception as e:
-        print(json.dumps({"error": str(e)}, indent=4))
+    call_snippet = None
+    url_arg = None
+    ch = 1
+    with app.app_context():
+        db.init_app(app)
+        
+        if len(sys.argv) < 2:
+            print("Usage: python prosody.py <URL> [channel_index]")
+            call_snippet = Call.query.filter_by(is_processed=False).order_by(Call.created_at).first()
+            url_arg = call_snippet.recording_url
+            ch = 1
+            # sys.exit(1)
+        else:
+            url_arg = sys.argv[1] if len(sys.argv) >= 1 else None
+            ch = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+        
+        try:
+            results = get_prosody_features(url_arg, ch)
+            jsonProsody = json.dumps(results, indent=4)
+            print(jsonProsody)
+            if call_snippet:
+                call_snippet.prosody_results = jsonProsody
+                call_snippet.is_processed = True
+                db.session.commit()
+        except Exception as e:
+            print(json.dumps({"error": str(e)}, indent=4))
