@@ -1,7 +1,8 @@
 from . import app
 from .models import Survey
-from flask import url_for, session, request
-from twilio.twiml.voice_response import VoiceResponse, Response, Gather, Say, Start, Transcription
+from flask import url_for, session, request, send_from_directory, Response, abort
+# from twilio.twiml.voice_response import VoiceResponse, Response, Gather, Say, Start, Transcription
+from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Start, Transcription
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 import os
@@ -11,6 +12,8 @@ from urllib.parse import quote
 from automated_survey_flask.models import db, Call
 from datetime import datetime
 import re
+import time
+import uuid
 
 # from . import csrf
 # from flask_wtf.csrf import CSRFProtect
@@ -29,7 +32,13 @@ VOICE_ALGO      = 1
 # 1. Access the exported environment variables
 account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
 auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+DB_FILE = 'links_db.json'
+EXPORT_DIR = os.path.join(app.static_folder, 'exports')
+TTL_SECONDS = 6000 # 10 minutes 
 
+phones_str = os.environ.get('ALLOWED_PHONES', '')
+
+ALLOWED_PHONES = [p.strip() for p in phones_str.split(',') if p.strip()]
 # 2. Safety check: Ensure the variables aren't empty
 if not account_sid or not auth_token:
     raise ValueError("Missing Twilio credentials. Did you remember to 'export' them in this terminal session?")
@@ -388,6 +397,83 @@ def send_survey_summary(from_number, to_number, questions_or_answers):
 
     return None
 
+@app.route('/send-report/<sender>/<to>', methods=['GET', 'POST'])
+def send_whatsapp_report(sender, to):
+    # 1. Generate the CSV file (using the logic we discussed)
+    # For this example, let's assume it's saved in a 'static/exports' folder
+    filename = "prosody_report.csv"
+    filepath = os.path.join(EXPORT_DIR, filename)
+    unique_id = str(uuid.uuid4())
+    ldb = load_db()
+    ldb[unique_id] = {
+        "filename": filename,
+        "created_at": time.time()
+    }
+    save_db(ldb)
+
+    # [Insert your Pandas Export Logic here to save to filepath]
+
+    # 2. Define the public URL for the file
+    # Replace with your actual domain or ngrok URL
+    base_url = "http://188.166.110.236:5000"
+    formatted_from = f"whatsapp:+{sender}" if not sender.startswith('whatsapp:') else sender
+    formatted_to = f"whatsapp:+{to}" if not to.startswith('whatsapp:') else to
+    secret_url = f"{base_url}/download/{unique_id}"
+    # 3. Send via WhatsApp
+    message = client.messages.create(
+        from_=f'{formatted_from}', # Twilio Sandbox number
+        to=f'{formatted_to}',  # Your WhatsApp number
+        body=f"Your eMolter Report is ready. This link expires in 10 minutes: {secret_url}",
+    )
+
+    return f"Report sent! unique_id: {unique_id}, SID: {message.sid}"
+
+# Assuming you have the get_allowed_phones() function we wrote earlier
+@app.route("/whatsapp-webhook", methods=['POST'])
+def whatsapp_reply():
+    sender_phone = request.values.get('From', '').replace('whatsapp:+', '')
+    incoming_msg = request.values.get('Body', '').lower()
+    base_url = "http://188.166.110.236:5000"
+    allowed_list = ALLOWED_PHONES #get_allowed_phones() # From your .bashrc environment variable
+    
+    resp = MessagingResponse()
+    
+    # SECURITY CHECK
+    if sender_phone not in allowed_list:
+        # We stay silent or send a polite "Not Authorized"
+        resp.message("Sorry, this number is not authorized to receive eMolter reports.")
+        return str(resp)
+
+    # If authorized, proceed with generating the unique link
+    if "report" in incoming_msg:
+        # ... generate unique_id, save to DB, and send link ...
+        unique_id = str(uuid.uuid4())
+        # (Rest of your logic)
+        resp.message(f"Authorized. Your report link: {base_url}/download/{unique_id}")
+    
+    return str(resp)
+
+@app.route('/download/<link_id>')
+def secure_download(link_id):
+    ldb = load_db()
+    print(f"ldb = {json.dumps(ldb)}")
+    if link_id not in ldb:
+        return "Invalid Link.", 404
+
+    link_data = ldb[link_id]
+    
+    # --- TTL CHECK ---
+    elapsed_time = time.time() - link_data['created_at']
+    if elapsed_time > TTL_SECONDS:
+        # Optional: Delete expired entry from DB
+        del ldb[link_id]
+        save_db(ldb)
+        return "This link has expired.", 403
+
+    return send_from_directory(EXPORT_DIR, link_data['filename'])
+
+
+
 def is_basic_valid(phone_number):
     # Remove any accidental spaces
     phone = phone_number.strip()
@@ -423,3 +509,12 @@ def survey_error(survey, send_function):
         return True
     return False
 
+def load_db():
+    if not os.path.exists(DB_FILE):
+        return {}
+    with open(DB_FILE, 'r') as f:
+        return json.load(f)
+    
+def save_db(data):
+    with open(DB_FILE, 'w') as f:
+        json.dump(data, f)

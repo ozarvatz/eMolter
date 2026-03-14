@@ -90,26 +90,45 @@ if __name__ == "__main__":
     call_snippet = None
     url_arg = None
     ch = 1
-    with app.app_context():
-        db.init_app(app)
-        
-        if len(sys.argv) < 2:
-            print("Usage: python prosody.py <URL> [channel_index]")
-            call_snippet = Call.query.filter_by(is_processed=False).order_by(Call.created_at).first()
-            url_arg = call_snippet.recording_url
-            ch = 1
-            # sys.exit(1)
-        else:
-            url_arg = sys.argv[1] if len(sys.argv) >= 1 else None
-            ch = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-        
+    if len(sys.argv) >= 2:
+        print("Usage: python prosody.py <URL> [channel_index]")
+        url_arg = sys.argv[1] if len(sys.argv) >= 1 else None
+        ch = int(sys.argv[2]) if len(sys.argv) > 2 else 1
         try:
             results = get_prosody_features(url_arg, ch)
             jsonProsody = json.dumps(results, indent=4)
             print(jsonProsody)
-            if call_snippet:
-                call_snippet.prosody_results = jsonProsody
-                call_snippet.is_processed = True
-                db.session.commit()
+            sys.exit(1)
         except Exception as e:
             print(json.dumps({"error": str(e)}, indent=4))
+    
+    with app.app_context():
+        db.init_app(app)
+        while True:
+            call_snippet = Call.query.filter_by(is_processed=False).order_by(Call.created_at).first()
+            if not call_snippet:
+                print("All rows in the DB Calls table have already been processed.")
+                sys.exit(1)
+            
+            if not call_snippet.recording_url:
+                print(f"There is no URL for record, call sid: {call_snippet.call_sid}")
+                call_snippet.is_processed = True
+                db.session.commit()
+                continue
+
+            url_arg = call_snippet.recording_url
+            ch = 1
+        
+            try:
+                results = get_prosody_features(url_arg, ch)
+                print(f"prosody for call id({call_snippet.id}): {json.dumps(results, indent=4)}")
+                # jsonProsody = json.dumps(results, indent=4)
+                call_snippet.prosody_results = results
+                call_snippet.is_processed = True
+                db.session.commit()
+                
+            except Exception as e:
+                print(json.dumps({"error": str(e),
+                                  "call_sid": call_snippet.call_sid,
+                                  "record_sid": call_snippet.record_sid}, indent=4))
+            
