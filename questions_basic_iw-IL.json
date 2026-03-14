@@ -1,0 +1,45 @@
+{
+  "questions": [
+    {
+      "body": "היי {}, זה אני 'אימוֹלטֶר'. איך היום שלך עובר עד כה?",
+      "type": "voice"
+    },
+    {
+      "body": "תגיד תודה לחמישה אנשים שעזרו לך או סימחו אותך.",
+      "type": "voice"
+    },
+    {
+      "body": "מהו הדבר הטוב שעשית או שאתה רוצה לעשות היום?",
+      "type": "voice"
+    }
+  ],
+  "messages": [
+    {
+      "body": "מצטער, התשובה לא נקלטה. שלום ותודה.",
+      "type": "voice",
+      "message": "sorry_failed"
+    },
+    {
+      "body": "אמרת: '{}'",
+      "type": "voice",
+      "message": "you_said"
+    },
+    {
+      "body": "תודה על התשובה. בהמשך יהיו עוד שאלות. שלום והמשך יום טוב!",
+      "type": "voice",
+      "message": "thanks"
+    },
+    {
+      "body": "שלום",
+      "type": "voice",
+      "message": "hello"
+    }
+  ],
+  "title": "Flask Survey",
+  "config": [
+    {
+      "body": "Google.he-IL-Standard-A",
+      "message": "voice_algo"
+    }
+  ]
+}

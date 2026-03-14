@@ -1,0 +1,73 @@
+{
+    "questions": [
+      {
+        "body": "Hallo {}, this is Molty here?",
+        "type": "voice"
+      },
+      {
+        "body": "Good morning, It’s Molty?",
+        "type": "voice"
+      },
+      {
+        "body": "Hello, good morning?",
+        "type": "voice"
+      },
+      {
+        "body":"How are you feeling?",
+        "type":"voice"
+      },
+      {
+        "body":"How’s it going today?",
+        "type":"voice"
+      },
+      {
+        "body":"Are you well?",
+        "type":"voice"
+      },
+      {
+        "body":"Do you feel you have energy?",
+        "type":"voice"
+      },
+      {
+        "body":"how is today compared to yesterday?",
+        "type":"voice"
+      },
+      {
+        "body":"Did you take your medications?",
+        "type":"voice"
+      },
+      {
+        "body":"Are you going to go out?",
+        "type":"voice"
+      }
+    ],
+    "messages": [
+        {
+        "body": "I'm sorry, your response wasn't recorded. Goodbye and thank you.",
+        "type": "voice",
+        "message": "sorry_failed"
+        },
+        {
+        "body": "You said: '{}'",
+        "type": "voice",
+        "message": "you_said"
+        },
+        {
+        "body": "Thank you for your answer. There will be more questions later. Goodbye and have a nice day!",
+        "type": "voice",
+        "message": "thanks"
+        },
+        {
+        "body": "Hello",
+        "type": "voice",
+        "message": "hello"
+        }
+    ],
+    "title": "eMolter voice Survey",
+    "config": [
+      {
+        "body": "Google.en-US-Wavenet-B",
+        "message": "voice_algo"
+      }
+    ]
+  }

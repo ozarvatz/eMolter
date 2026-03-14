@@ -1,0 +1,2 @@
+python callMe.py --phone +972503220778 --lang he-IL --name "עוז"
+python callMe.py --phone +972545706843 --lang he-IL --name "בוריס"

@@ -1,0 +1,53 @@
+{
+  "questions": [
+      {
+        "body": "שלום {}, כאן מולטי. מה שלומך?",
+        "type": "voice"
+      },
+      {
+        "body": "האם אתה מרגיש טוב?",
+        "type": "voice"
+      },
+      {
+        "body": "האם אתה מרגיש שיש לך אנרגיה?",
+        "type": "voice"
+      },
+      {
+        "body": "איך היום שלך בהשוואה לאתמול?",
+        "type": "voice"
+      },
+      {
+        "body": "האם אתה מתכנן לצאת היום החוצה?",
+        "type": "voice"
+      }
+  ],
+  "messages": [
+    {
+      "body": "מצטער, התשובה לא נקלטה. שלום ותודה.",
+      "type": "voice",
+      "message": "sorry_failed"
+    },
+    {
+      "body": "אמרת: '{}'",
+      "type": "voice",
+      "message": "you_said"
+    },
+    {
+      "body": "תודה על התשובה. בהמשך יהיו עוד שאלות. שלום והמשך יום טוב!",
+      "type": "voice",
+      "message": "thanks"
+    },
+    {
+      "body": "שלום",
+      "type": "voice",
+      "message": "hello"
+    }
+  ],
+  "title": "Flask Survey",
+  "config": [
+    {
+      "body": "Google.he-IL-Standard-A",
+      "message": "voice_algo"
+    }
+  ]
+}

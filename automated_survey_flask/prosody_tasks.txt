@@ -1,0 +1,4 @@
+CA3b6df895f5a6035bef02588a3d664361|RE388f09a4cf0309f26fffdb6a97d46e2f|עוז|QNone|https://api.twilio.com/2010-04-01/Accounts/ACccab2f12644133826ed8633d8c4629af/Recordings/RE388f09a4cf0309f26fffdb6a97d46e2f.wav
+CA55066ce41b830684a3738a7aa30402d5|RE787992db1b08d88825a6f6884a8a531b|עוז|QNone|https://api.twilio.com/2010-04-01/Accounts/ACccab2f12644133826ed8633d8c4629af/Recordings/RE787992db1b08d88825a6f6884a8a531b.wav
+CA55066ce41b830684a3738a7aa30402d5|REd1fb383921eb98f91d8f14c89d9f8de7|עוז|QNone|https://api.twilio.com/2010-04-01/Accounts/ACccab2f12644133826ed8633d8c4629af/Recordings/REd1fb383921eb98f91d8f14c89d9f8de7.wav
+CA55066ce41b830684a3738a7aa30402d5|REe83eb8ecec8641efe4a36fd3de612048|עוז|QNone|https://api.twilio.com/2010-04-01/Accounts/ACccab2f12644133826ed8633d8c4629af/Recordings/REe83eb8ecec8641efe4a36fd3de612048.wav
