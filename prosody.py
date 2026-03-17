@@ -27,27 +27,72 @@ def parse_voice_report(report_str):
 
 def get_voice_health_score(voice_stats):
     """
-    Returns a float (0.0 to 1.0+) representing vocal hoarseness/dysphonia.
-    Higher = more 'unhealthy' or 'noisy' signal.
+    Adjusted for Twilio/Telephony Audio.
+    Returns 0.0 (Clean) to 1.0 (Very Hoarse).
     """
-    # 1. Jitter (Frequency instability) - Normal is < 1.04%
-    # We normalize it so that 1.04% is roughly 0.25 on our scale
-    jitter_score = voice_stats.get('jitter_local', 0) * 25 
+    # 1. Jitter: Phone lines add jitter. 
+    jitter = voice_stats.get('jitter_local', 0)
+    jitter_norm = jitter / 0.025 # 2.5% is now the 'very high' mark
 
-    # 2. Shimmer (Amplitude instability) - Normal is < 3.81%
-    # We normalize so 3.8% is roughly 0.25
-    shimmer_score = voice_stats.get('shimmer_local', 0) * 6.5
+    # 2. Shimmer: Twilio compression affects amplitude.
+    shimmer = voice_stats.get('shimmer_local', 0)
+    shimmer_norm = shimmer / 0.10 # 10% is now the 'very high' mark
 
-    # 3. HNR (Harmonics-to-Noise) - Normal is > 20dB. 
-    # Below 10dB is very hoarse. We invert this.
-    hnr = voice_stats.get('mean_noise-to-harmonics_ratio', 0.1) # Praat often gives NHR
-    hnr_score = hnr * 2.0 
+    # 3. HNR: This is the most reliable for phone calls.
+    # Normal is >15dB. If it drops below 10dB, it's hoarse.
+    hnr = voice_stats.get('mean_harmonics-to-noise_ratio', 20)
+    # We convert HNR to a 0-1 scale where 20dB=0 and 5dB=1
+    hnr_norm = (20 - hnr) / 15 
+    hnr_norm = max(0, min(hnr_norm, 1.0))
 
-    # Combined Weighted Score
-    total_score = (jitter_score * 0.4) + (shimmer_score * 0.4) + (hnr_score * 0.2)
+    # 4. Voice Breaks: Very common in Twilio recordings.
+    # We significantly reduce the impact of this parameter.
+    breaks = voice_stats.get('degree_of_voice_breaks', 0)
+    breaks_norm = (breaks / 50.0) # Only starts becoming a major issue above 50%
+
+    # NEW WEIGHTED CALCULATION
+    # We give HNR the most weight because it's the most stable on phone calls.
+    score = (jitter_norm * 0.2) + (shimmer_norm * 0.2) + (hnr_norm * 0.5) + (breaks_norm * 0.1)
     
-    return round(min(total_score, 1.0), 3)
+    return round(max(0.0, min(score, 1.0)), 3)
 
+"""
+the function return's json with the follow parameters: 
+Core Prosody (The "Melody")
+
+    mean_pitch_hz: The average "highness" or "lowness" of the voice.
+
+    pitch_sd_hz: How much the pitch varies. High SD = expressive/emotional; Low SD = monotone (potential depression marker).
+
+    pitch_range_hz: The distance between the lowest and highest note hit.
+
+    mean_intensity_db: The average volume. (Yours is ~70 due to the scaling we added).
+
+    speaking_ratio: The percentage of the recording containing actual speech vs. silence. 0.55 means they were talking about 55% of the time.
+
+Voice Quality (Physical Health & Stability)
+
+These measure the "micro-wobbles" in the vocal folds.
+
+    jitter_local (0.697%): Frequency instability. Values below 1.04% are considered healthy/normal.
+
+    shimmer_local (5.837%): Amplitude (volume) instability. Values above 3.81% (like yours) can indicate slight breathiness or raspiness.
+
+    mean_noise-to-harmonics (NHR): The amount of "hiss" in the voice. Lower is better.
+
+    mean_harmonics-to-noise (HNR): The "pureness" of the voice. 19.1 dB is a very good, clean signal for a phone call.
+
+Voice Breaks (Fluency)
+
+    number_of_voice_breaks: How many times the voice cut out unexpectedly (not a pause, but a "crack").
+
+    degree_of_voice_breaks: The percentage of the speech that was "broken." 30% is quite high—this might be why your voice_health_score hit 1.0.
+
+Resonance (Vocal Tract)
+
+    f1_mean_hz / f2_mean_hz: These are Formants. They don't represent pitch, but the shape of the mouth. They are used to identify vowels and "vocal brightness."
+
+"""
 def get_prosody_features(url, channel_index=1):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
         tmp_path = tmp_file.name
