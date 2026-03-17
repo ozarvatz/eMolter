@@ -25,6 +25,29 @@ def parse_voice_report(report_str):
                 data[key] = match.group(2)
     return data
 
+def get_voice_health_score(voice_stats):
+    """
+    Returns a float (0.0 to 1.0+) representing vocal hoarseness/dysphonia.
+    Higher = more 'unhealthy' or 'noisy' signal.
+    """
+    # 1. Jitter (Frequency instability) - Normal is < 1.04%
+    # We normalize it so that 1.04% is roughly 0.25 on our scale
+    jitter_score = voice_stats.get('jitter_local', 0) * 25 
+
+    # 2. Shimmer (Amplitude instability) - Normal is < 3.81%
+    # We normalize so 3.8% is roughly 0.25
+    shimmer_score = voice_stats.get('shimmer_local', 0) * 6.5
+
+    # 3. HNR (Harmonics-to-Noise) - Normal is > 20dB. 
+    # Below 10dB is very hoarse. We invert this.
+    hnr = voice_stats.get('mean_noise-to-harmonics_ratio', 0.1) # Praat often gives NHR
+    hnr_score = hnr * 2.0 
+
+    # Combined Weighted Score
+    total_score = (jitter_score * 0.4) + (shimmer_score * 0.4) + (hnr_score * 0.2)
+    
+    return round(min(total_score, 1.0), 3)
+
 def get_prosody_features(url, channel_index=1):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
         tmp_path = tmp_file.name
@@ -37,9 +60,9 @@ def get_prosody_features(url, channel_index=1):
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
 
-            # 2. Load into Parselmouth
+            # 2. Load into Parselmouth and scale
             full_sound = parselmouth.Sound(tmp_path)
-            
+            full_sound.scale_intensity(70)
             # 3. Safe Channel Extraction
             num_channels = call(full_sound, "Get number of channels")
             if num_channels > 1:
@@ -54,10 +77,12 @@ def get_prosody_features(url, channel_index=1):
             # --- Pitch & Intensity ---
             pitch = sound.to_pitch()
             features["mean_pitch_hz"] = call(pitch, "Get mean", 0, 0, "Hertz")
-            
+            features["pitch_sd_hz"] = call(pitch, "Get standard deviation", 0, 0, "Hertz")
+            features["pitch_range_hz"] = call(pitch, "Get maximum", 0, 0, "Hertz", "Parabolic") - call(pitch, "Get minimum", 0, 0, "Hertz", "Parabolic")
+
             intensity = sound.to_intensity()
             features["mean_intensity_db"] = call(intensity, "Get mean", 0, 0, "energy")
-
+            
             # --- Glottal Pulses & Voice Quality ---
             # PointProcess is used for individual glottal pulse timing
             pulses = call([sound, pitch], "To PointProcess (cc)")
@@ -65,12 +90,7 @@ def get_prosody_features(url, channel_index=1):
             # This generates the "everything" report (Jitter, Shimmer, HNR, etc.)
             raw_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
             features["voice_quality_stats"] = parse_voice_report(raw_report)
-
-            # Voice Report (Comprehensive Glottal Analysis)
-            # This returns a long string of data about pulses, breaks, and glottal cycles
-            # voice_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
-            # features["glottal_voice_report"] = voice_report
-                    
+            features["voice_health_score"] = get_voice_health_score(features["voice_quality_stats"])        
             # --- Formants (Vocal Tract resonance) ---
             formant = sound.to_formant_burg()
             features["f1_mean_hz"] = call(formant, "Get mean", 1, 0, 0, "Hertz")
@@ -79,6 +99,17 @@ def get_prosody_features(url, channel_index=1):
             # --- Harmonicity ---
             harmonicity = call(sound, "To Harmonicity (cc)", 0.01, 75, 0.1, 1.0)
             features["mean_hnr_db"] = call(harmonicity, "Get mean", 0, 0)
+
+            ## --- Speech rate & Puse ---
+            intensities = intensity.values[0]
+            threshold = features["mean_intensity_db"] - 10 # 10dB below mean is often silence
+            voiced_frames = [i for i in intensities if i > threshold]
+            if len(intensities) > 0:
+                features["speaking_ratio"] = len(voiced_frames) / len(intensities)
+            else:
+                features["speaking_ratio"] = 0.0
+
+            features["total_duration"] = sound.get_total_duration()
 
             return features
 
