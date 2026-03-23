@@ -41,13 +41,18 @@
 <div class="row" style="margin-top: 20px;">
     <div class="col-md-12">
         <h3>Recent Activity</h3>
-        <table class="table table-striped">
+        <div class="table-responsive">
+        <table class="table table-striped table-condensed">
             <thead>
                 <tr>
                     <th>Date</th>
                     <th>Patient Phone</th>
                     <th>Question ID</th>
                     <th>Status</th>
+                    <th>Pitch (Hz)</th>
+                    <th>Voice Quality (HNR)</th>
+                    <th>Shimmer (%)</th>
+                    <th>Jitter (%)</th>
                 </tr>
             </thead>
             <tbody>
@@ -58,15 +63,256 @@
                     <td>{{ call.question_id }}</td>
                     <td>
                         {% if call.is_processed %}
-                            <span class="label label-success">Processed</span>
+                            <a href="#" class="label label-success" data-toggle="modal" data-target="#prosodyModal{{ call.id }}" style="cursor: pointer;">
+                                Processed
+                            </a>
                         {% else %}
                             <span class="label label-warning">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if call.is_processed and call.prosody_results %}
+                            {{ "%.1f"|format(call.prosody_results['mean_pitch_hz']) if call.prosody_results.get('mean_pitch_hz') else '-' }}
+                        {% else %}
+                            <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if call.is_processed and call.prosody_results %}
+                            {% set hnr = call.prosody_results.get('mean_hnr_db') %}
+                            {% if hnr %}
+                                <span class="{% if hnr > 15 %}text-success{% elif hnr > 10 %}text-warning{% else %}text-danger{% endif %}">
+                                    {{ "%.1f"|format(hnr) }} dB
+                                </span>
+                            {% else %}
+                                -
+                            {% endif %}
+                        {% else %}
+                            <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if call.is_processed and call.prosody_results and call.prosody_results.get('voice_quality_stats') %}
+                            {% set shimmer = call.prosody_results['voice_quality_stats'].get('shimmer_local') %}
+                            {% if shimmer %}
+                                <span class="{% if shimmer < 3.0 %}text-success{% elif shimmer < 5.0 %}text-warning{% else %}text-danger{% endif %}">
+                                    {{ "%.2f"|format(shimmer) }}
+                                </span>
+                            {% else %}
+                                -
+                            {% endif %}
+                        {% else %}
+                            <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if call.is_processed and call.prosody_results and call.prosody_results.get('voice_quality_stats') %}
+                            {% set jitter = call.prosody_results['voice_quality_stats'].get('jitter_local') %}
+                            {% if jitter %}
+                                <span class="{% if jitter < 1.0 %}text-success{% elif jitter < 2.0 %}text-warning{% else %}text-danger{% endif %}">
+                                    {{ "%.2f"|format(jitter) }}%
+                                </span>
+                            {% else %}
+                                -
+                            {% endif %}
+                        {% else %}
+                            <span class="text-muted">-</span>
                         {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if pagination.pages > 1 %}
+        <nav aria-label="Page navigation">
+            <ul class="pagination">
+                <li class="{% if not pagination.has_prev %}disabled{% endif %}">
+                    <a href="{{ url_for('dashboard', page=pagination.prev_num) if pagination.has_prev else '#' }}" aria-label="Previous">
+                        <span aria-hidden="true">&laquo;</span>
+                    </a>
+                </li>
+                {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                    {% if page_num %}
+                        <li class="{% if page_num == pagination.page %}active{% endif %}">
+                            <a href="{{ url_for('dashboard', page=page_num) }}">{{ page_num }}</a>
+                        </li>
+                    {% else %}
+                        <li class="disabled"><a>...</a></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="{% if not pagination.has_next %}disabled{% endif %}">
+                    <a href="{{ url_for('dashboard', page=pagination.next_num) if pagination.has_next else '#' }}" aria-label="Next">
+                        <span aria-hidden="true">&raquo;</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+
+        <div class="well well-sm">
+            <small>
+                <strong>Legend:</strong>
+                Voice Quality (HNR): <span class="text-success">Good (&gt;15 dB)</span>,
+                <span class="text-warning">Fair (10-15 dB)</span>,
+                <span class="text-danger">Poor (&lt;10 dB)</span> |
+                Shimmer: <span class="text-success">Good (&lt;3%)</span>,
+                <span class="text-warning">Fair (3-5%)</span>,
+                <span class="text-danger">Poor (&gt;5%)</span> |
+                Jitter: <span class="text-success">Good (&lt;1%)</span>,
+                <span class="text-warning">Fair (1-2%)</span>,
+                <span class="text-danger">Poor (&gt;2%)</span> |
+                Click "Processed" to view all prosody details
+            </small>
+        </div>
     </div>
 </div>
+
+<!-- Prosody Details Modals -->
+{% for call in recent_calls %}
+{% if call.is_processed and call.prosody_results %}
+<div class="modal fade" id="prosodyModal{{ call.id }}" tabindex="-1" role="dialog" aria-labelledby="prosodyModalLabel{{ call.id }}">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <h4 class="modal-title" id="prosodyModalLabel{{ call.id }}">
+                    Prosody Analysis - {{ call.patient_phone }} - {{ call.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </h4>
+            </div>
+            <div class="modal-body">
+                <h5>Basic Voice Metrics</h5>
+                <table class="table table-bordered table-condensed">
+                    <tr>
+                        <th>Mean Pitch</th>
+                        <td>{{ "%.2f"|format(call.prosody_results['mean_pitch_hz']) }} Hz</td>
+                        <th>Mean Intensity</th>
+                        <td>{{ "%.2f"|format(call.prosody_results['mean_intensity_db']) if call.prosody_results.get('mean_intensity_db') else 'N/A' }} dB</td>
+                    </tr>
+                    <tr>
+                        <th>Mean HNR</th>
+                        <td>{{ "%.2f"|format(call.prosody_results['mean_hnr_db']) }} dB</td>
+                        <th>Formant F1</th>
+                        <td>{{ "%.2f"|format(call.prosody_results['f1_mean_hz']) }} Hz</td>
+                    </tr>
+                    <tr>
+                        <th>Formant F2</th>
+                        <td>{{ "%.2f"|format(call.prosody_results['f2_mean_hz']) }} Hz</td>
+                        <th></th>
+                        <td></td>
+                    </tr>
+                </table>
+
+                {% if call.prosody_results.get('voice_quality_stats') %}
+                <h5>Voice Quality Statistics</h5>
+                <table class="table table-bordered table-condensed">
+                    {% set vqs = call.prosody_results['voice_quality_stats'] %}
+                    <tr>
+                        <th>Duration</th>
+                        <td>{{ "%.2f"|format(vqs.get('from_0_to_0_seconds_duration', 0)) }} s</td>
+                        <th>Number of Pulses</th>
+                        <td>{{ vqs.get('number_of_pulses', 0)|int }}</td>
+                    </tr>
+                    <tr>
+                        <th>Median Pitch</th>
+                        <td>{{ "%.2f"|format(vqs.get('median_pitch', 0)) }} Hz</td>
+                        <th>Pitch Std Dev</th>
+                        <td>{{ "%.2f"|format(vqs.get('standard_deviation', 0)) }}</td>
+                    </tr>
+                    <tr>
+                        <th>Min Pitch</th>
+                        <td>{{ "%.2f"|format(vqs.get('minimum_pitch', 0)) }} Hz</td>
+                        <th>Max Pitch</th>
+                        <td>{{ "%.2f"|format(vqs.get('maximum_pitch', 0)) }} Hz</td>
+                    </tr>
+                    <tr>
+                        <th>Voice Breaks</th>
+                        <td>{{ vqs.get('number_of_voice_breaks', 0)|int }}</td>
+                        <th>Degree of Voice Breaks</th>
+                        <td>{{ "%.2f"|format(vqs.get('degree_of_voice_breaks', 0)) }}%</td>
+                    </tr>
+                </table>
+
+                <h5>Jitter (Voice Stability)</h5>
+                <table class="table table-bordered table-condensed">
+                    <tr>
+                        <th>Jitter Local</th>
+                        <td>{{ "%.3f"|format(vqs.get('jitter_local', 0)) }}%</td>
+                        <th>Jitter RAP</th>
+                        <td>{{ "%.3f"|format(vqs.get('jitter_rap', 0)) }}%</td>
+                    </tr>
+                    <tr>
+                        <th>Jitter PPQ5</th>
+                        <td>{{ "%.3f"|format(vqs.get('jitter_ppq5', 0)) }}%</td>
+                        <th>Jitter DDP</th>
+                        <td>{{ "%.3f"|format(vqs.get('jitter_ddp', 0)) }}%</td>
+                    </tr>
+                </table>
+
+                <h5>Shimmer (Amplitude Variation)</h5>
+                <table class="table table-bordered table-condensed">
+                    <tr>
+                        <th>Shimmer Local</th>
+                        <td>{{ "%.3f"|format(vqs.get('shimmer_local', 0)) }}%</td>
+                        <th>Shimmer Local (dB)</th>
+                        <td>{{ "%.3f"|format(vqs.get('shimmer_local,_db', 0)) }} dB</td>
+                    </tr>
+                    <tr>
+                        <th>Shimmer APQ3</th>
+                        <td>{{ "%.3f"|format(vqs.get('shimmer_apq3', 0)) }}%</td>
+                        <th>Shimmer APQ5</th>
+                        <td>{{ "%.3f"|format(vqs.get('shimmer_apq5', 0)) }}%</td>
+                    </tr>
+                    <tr>
+                        <th>Shimmer APQ11</th>
+                        <td>{{ "%.3f"|format(vqs.get('shimmer_apq11', 0)) }}%</td>
+                        <th>Shimmer DDA</th>
+                        <td>{{ "%.3f"|format(vqs.get('shimmer_dda', 0)) }}%</td>
+                    </tr>
+                </table>
+
+                <h5>Harmonics & Noise</h5>
+                <table class="table table-bordered table-condensed">
+                    <tr>
+                        <th>Mean Autocorrelation</th>
+                        <td>{{ "%.6f"|format(vqs.get('mean_autocorrelation', 0)) }}</td>
+                        <th>Noise-to-Harmonics Ratio</th>
+                        <td>{{ "%.6f"|format(vqs.get('mean_noise-to-harmonics_ratio', 0)) }}</td>
+                    </tr>
+                    <tr>
+                        <th>Harmonics-to-Noise Ratio</th>
+                        <td colspan="3">{{ "%.3f"|format(vqs.get('mean_harmonics-to-noise_ratio', 0)) }} dB</td>
+                    </tr>
+                </table>
+
+                <h5>Voicing Statistics</h5>
+                <table class="table table-bordered table-condensed">
+                    <tr>
+                        <th>Locally Unvoiced Frames</th>
+                        <td>{{ "%.2f"|format(vqs.get('fraction_of_locally_unvoiced_frames', 0)) }}%</td>
+                        <th>Number of Periods</th>
+                        <td>{{ vqs.get('number_of_periods', 0)|int }}</td>
+                    </tr>
+                    <tr>
+                        <th>Mean Period</th>
+                        <td>{{ "%.3f"|format(vqs.get('mean_period', 0)) }} ms</td>
+                        <th>Period Std Dev</th>
+                        <td>{{ "%.3f"|format(vqs.get('standard_deviation_of_period', 0)) }} ms</td>
+                    </tr>
+                </table>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endfor %}
+
 {% endblock %}

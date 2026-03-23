@@ -18,19 +18,28 @@ def get_patient_or_403(patient_id):
 @app.route('/dashboard')
 @login_required
 def dashboard():
+    page = request.args.get('page', 1, type=int)
+    per_page = 10
+
     patients = Patient.active().filter_by(therapist_id=current_user.id).all()
-    recent_calls = Call.query.filter(
+
+    # Get paginated calls
+    calls_query = Call.query.filter(
         Call.patient_phone.in_([p.phone for p in patients])
-    ).order_by(Call.created_at.desc()).limit(10).all()
+    ).order_by(Call.created_at.desc())
+
+    calls_pagination = calls_query.paginate(page=page, per_page=per_page, error_out=False)
+    recent_calls = calls_pagination.items
 
     stats = {
         'total_patients': len(patients),
-        'recent_calls': len(recent_calls),
+        'recent_calls': calls_query.count(),
         'batches': len(set(p.batch for p in patients if p.batch))
     }
 
     return render_template('dashboard.html', patients=patients,
-                         recent_calls=recent_calls, stats=stats)
+                         recent_calls=recent_calls, stats=stats,
+                         pagination=calls_pagination)
 
 
 @app.route('/patients')
