@@ -5,12 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}eMolter{% endblock %}</title>
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap.min.css">
+    <style>
+        .navbar-brand {
+            padding: 5px 15px;
+        }
+        .navbar-brand img {
+            height: 40px;
+            width: auto;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar navbar-default">
         <div class="container">
             <div class="navbar-header">
-                <a class="navbar-brand" href="/">eMolter</a>
+                <a class="navbar-brand" href="/">
+                    <img src="{{ url_for('static', filename='img/logo.svg') }}?v=4" alt="eMolter">
+                </a>
             </div>
             <ul class="nav navbar-nav navbar-right">
                 {% if current_user.is_authenticated %}
