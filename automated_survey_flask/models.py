@@ -1,4 +1,6 @@
 from automated_survey_flask import db
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 class Survey(db.Model):
@@ -65,13 +67,25 @@ class Patient(db.Model):
     __tablename__ = 'patients'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
+    nickname = db.Column(db.String(100), nullable=True)
     phone = db.Column(db.String(20), unique=True, nullable=False)
+    batch = db.Column(db.String(50), nullable=True)
     language = db.Column(db.String(10), nullable=False)
+    therapist_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    deleted = db.Column(db.Boolean, default=False)
     #calls = db.relationship('Call', backref='patient', lazy=True)
-    def __init__(self, name, phone_number, language='he-IL'):
+
+    def __init__(self, name, phone, language='he-IL', nickname=None, batch=None, therapist_id=None):
         self.name = name
-        self.phone_number = phone_number
+        self.phone = phone  # FIXED: was phone_number
+        self.nickname = nickname
+        self.batch = batch
         self.language = language
+        self.therapist_id = therapist_id
+
+    @classmethod
+    def active(cls):
+        return cls.query.filter_by(deleted=False)
 
 
 class Call(db.Model):
@@ -129,4 +143,33 @@ class Call(db.Model):
         self.patient_phone = patientPhone
         self.carrier_phone = carrierPhone
         self.questions_file = questionsFile
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phone = db.Column(db.String(20), unique=True, nullable=False)
+    nickname = db.Column(db.String(100), nullable=False)
+    batch = db.Column(db.String(50), nullable=True)
+    language = db.Column(db.String(10), default='he-IL')
+    is_superuser = db.Column(db.Boolean, default=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    deleted = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    # Relationship
+    patients = db.relationship('Patient',
+        primaryjoin='and_(User.id==Patient.therapist_id, Patient.deleted==False)',
+        backref='therapist', lazy='dynamic')
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+    @classmethod
+    def active(cls):
+        return cls.query.filter_by(deleted=False)
 

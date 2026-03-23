@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Therapists - eMolter{% endblock %}
+
+{% block content %}
+<h1>Manage Therapists</h1>
+<a href="{{ url_for('register') }}" class="btn btn-primary" style="margin-bottom: 15px;">Add New Therapist</a>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Nickname</th>
+            <th>Phone</th>
+            <th>Batch</th>
+            <th>Patients</th>
+            <th>Superuser</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for therapist in therapists %}
+        <tr>
+            <td>{{ therapist.nickname }}</td>
+            <td>{{ therapist.phone }}</td>
+            <td>{{ therapist.batch or '-' }}</td>
+            <td>{{ therapist.patients.count() }}</td>
+            <td>
+                {% if therapist.is_superuser %}
+                    <span class="label label-danger">Yes</span>
+                {% else %}
+                    <span class="label label-default">No</span>
+                {% endif %}
+            </td>
+            <td>
+                <a href="{{ url_for('therapist_edit', id=therapist.id) }}" class="btn btn-sm btn-default">Edit</a>
+                {% if therapist.id != current_user.id %}
+                <form method="POST" action="{{ url_for('therapist_delete', id=therapist.id) }}"
+                      style="display:inline;" onsubmit="return confirm('Delete this therapist?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

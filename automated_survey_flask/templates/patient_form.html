@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if patient else 'New' }} Patient - eMolter{% endblock %}
+
+{% block content %}
+<h1>{{ 'Edit' if patient else 'New' }} Patient</h1>
+
+<form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+    <div class="form-group">
+        <label for="name">Full Name *</label>
+        <input type="text" class="form-control" id="name" name="name"
+               value="{{ patient.name if patient else '' }}" required>
+    </div>
+
+    <div class="form-group">
+        <label for="nickname">Nickname</label>
+        <input type="text" class="form-control" id="nickname" name="nickname"
+               value="{{ patient.nickname if patient else '' }}">
+    </div>
+
+    <div class="form-group">
+        <label for="phone">Phone Number *</label>
+        <input type="text" class="form-control" id="phone" name="phone"
+               value="{{ patient.phone if patient else '' }}"
+               placeholder="+972501234567" required>
+    </div>
+
+    <div class="form-group">
+        <label for="batch">Batch</label>
+        <input type="text" class="form-control" id="batch" name="batch"
+               value="{{ patient.batch if patient else 'basic' }}">
+    </div>
+
+    <div class="form-group">
+        <label for="language">Language</label>
+        <select class="form-control" id="language" name="language">
+            <option value="he-IL" {{ 'selected' if patient and patient.language == 'he-IL' else '' }}>Hebrew (he-IL)</option>
+            <option value="de-DE" {{ 'selected' if patient and patient.language == 'de-DE' else '' }}>German (de-DE)</option>
+            <option value="en-US" {{ 'selected' if patient and patient.language == 'en-US' else '' }}>English (en-US)</option>
+        </select>
+    </div>
+
+    <button type="submit" class="btn btn-primary">{{ 'Update' if patient else 'Create' }} Patient</button>
+    <a href="{{ url_for('patient_list') }}" class="btn btn-default">Cancel</a>
+</form>
+{% endblock %}

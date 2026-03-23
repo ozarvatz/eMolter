@@ -6,6 +6,8 @@ from automated_survey_flask import app, db
 
 class BaseTest(XmlTestCase):
     def setUp(self):
+        self.app_context = app.app_context()
+        self.app_context.push()
         self.client = app.test_client()
         db.create_all()
         self.seed()
@@ -13,6 +15,7 @@ class BaseTest(XmlTestCase):
     def tearDown(self):
         db.session.remove()
         db.drop_all()
+        self.app_context.pop()
 
     @staticmethod
     def delete_all_surveys():

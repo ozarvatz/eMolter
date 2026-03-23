@@ -3,7 +3,7 @@ from flask_migrate import Migrate, MigrateCommand
 
 # from flask_migrate import upgrade as upgrade_database
 from automated_survey_flask import app, db, parsers, prepare_app
-from automated_survey_flask.models import Survey, Question, Patient  # <--- Add Patient here
+from automated_survey_flask.models import Survey, Question, Patient, User  # <--- Add Patient and User here
 
 prepare_app()
 migrate = Migrate(app, db)
@@ -53,6 +53,29 @@ def seed_patients():
     
     db.session.commit()
     print("✅ Patients seeded successfully!")
+
+
+@manager.command
+def create_superuser():
+    """Create initial superuser account"""
+    phone = input("Enter phone number (e.g., +972501234567): ")
+    nickname = input("Enter nickname: ")
+    password = input("Enter password: ")
+
+    if User.query.filter_by(phone=phone).first():
+        print("User with this phone already exists!")
+        return
+
+    superuser = User(
+        phone=phone,
+        nickname=nickname,
+        is_superuser=True
+    )
+    superuser.set_password(password)
+    db.session.add(superuser)
+    db.session.commit()
+    print(f"✅ Superuser created: {superuser.nickname} ({superuser.phone})")
+
 
 if __name__ == "__main__":
     manager.run()

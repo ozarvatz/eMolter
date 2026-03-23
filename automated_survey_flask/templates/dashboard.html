@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - eMolter{% endblock %}
+
+{% block content %}
+<h1>Welcome, {{ current_user.nickname }}</h1>
+
+<div class="row">
+    <div class="col-md-4">
+        <div class="panel panel-primary">
+            <div class="panel-heading">Total Patients</div>
+            <div class="panel-body">
+                <h2>{{ stats.total_patients }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="panel panel-success">
+            <div class="panel-heading">Recent Calls</div>
+            <div class="panel-body">
+                <h2>{{ stats.recent_calls }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="panel panel-info">
+            <div class="panel-heading">Batches</div>
+            <div class="panel-body">
+                <h2>{{ stats.batches }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <a href="{{ url_for('patient_new') }}" class="btn btn-primary">Add New Patient</a>
+        <a href="{{ url_for('patient_list') }}" class="btn btn-default">View All Patients</a>
+    </div>
+</div>
+
+<div class="row" style="margin-top: 20px;">
+    <div class="col-md-12">
+        <h3>Recent Activity</h3>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Patient Phone</th>
+                    <th>Question ID</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for call in recent_calls %}
+                <tr>
+                    <td>{{ call.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ call.patient_phone }}</td>
+                    <td>{{ call.question_id }}</td>
+                    <td>
+                        {% if call.is_processed %}
+                            <span class="label label-success">Processed</span>
+                        {% else %}
+                            <span class="label label-warning">Pending</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

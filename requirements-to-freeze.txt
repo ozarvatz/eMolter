@@ -2,9 +2,11 @@
 Flask
 
 # Flask components for forms/database/bootstrap
+Flask-Login
 Flask-Migrate
 Flask-Script
 Flask-SQLAlchemy
+Flask-WTF
 
 # External libraries
 twilio

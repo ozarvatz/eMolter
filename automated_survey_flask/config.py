@@ -26,6 +26,7 @@ class TestConfig(DefaultConfig):
     SERVER_NAME = 'server.test'
     TESTING = True
     DEBUG = True
+    WTF_CSRF_ENABLED = False  # Disable CSRF for testing
 
 
 config_env_files = {

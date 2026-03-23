@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if therapist else 'New' }} Therapist - eMolter{% endblock %}
+
+{% block content %}
+<h1>{{ 'Edit' if therapist else 'New' }} Therapist</h1>
+
+<form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+    <div class="form-group">
+        <label for="nickname">Nickname *</label>
+        <input type="text" class="form-control" id="nickname" name="nickname"
+               value="{{ therapist.nickname if therapist else '' }}" required>
+    </div>
+
+    <div class="form-group">
+        <label for="phone">Phone Number *</label>
+        <input type="text" class="form-control" id="phone" name="phone"
+               value="{{ therapist.phone if therapist else '' }}"
+               placeholder="+972501234567" required>
+    </div>
+
+    <div class="form-group">
+        <label for="password">Password {{ 'Reset (leave blank to keep current)' if therapist else '*' }}</label>
+        <input type="password" class="form-control" id="password" name="password"
+               {{ '' if therapist else 'required' }}>
+    </div>
+
+    <div class="form-group">
+        <label for="batch">Batch</label>
+        <input type="text" class="form-control" id="batch" name="batch"
+               value="{{ therapist.batch if therapist else '' }}">
+    </div>
+
+    <div class="form-group">
+        <label for="language">Language</label>
+        <select class="form-control" id="language" name="language">
+            <option value="he-IL" {{ 'selected' if therapist and therapist.language == 'he-IL' else '' }}>Hebrew (he-IL)</option>
+            <option value="de-DE" {{ 'selected' if therapist and therapist.language == 'de-DE' else '' }}>German (de-DE)</option>
+            <option value="en-US" {{ 'selected' if therapist and therapist.language == 'en-US' else '' }}>English (en-US)</option>
+        </select>
+    </div>
+
+    <div class="checkbox">
+        <label>
+            <input type="checkbox" name="is_superuser" {{ 'checked' if therapist and therapist.is_superuser else '' }}>
+            Superuser
+        </label>
+    </div>
+
+    <button type="submit" class="btn btn-primary">{{ 'Update' if therapist else 'Create' }} Therapist</button>
+    <a href="{{ url_for('therapist_list') }}" class="btn btn-default">Cancel</a>
+</form>
+{% endblock %}
