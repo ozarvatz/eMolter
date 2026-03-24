@@ -111,7 +111,7 @@ def voice_survey():
             current_question_txt = current_question_txt.format(patientName)
             hello_text_msg = read_question_from_json(lang, batch, HELLO, "messages")
             #gather.say(
-            response.Say(
+            response.say(
                 hello_text_msg,
                 language=f'{lang}',
                 voice=voice_model #'Google.he-IL-Standard-A'
@@ -123,7 +123,7 @@ def voice_survey():
     
     
     #gather.say(
-    response.Say(
+    response.say(
         current_question_txt, 
         language=f'{lang}', 
         voice=voice_model #'Google.he-IL-Standard-A'
@@ -159,7 +159,7 @@ def voice_survey():
 
     sorry_failed = read_question_from_json(lang, batch, SORRY_FAILED, "messages")
     # response.append(gather)
-    response.Say(
+    response.say(
         sorry_failed,
         language=f'{lang}',
         voice=voice_model #'Google.he-IL-Standard-A'  
@@ -287,7 +287,7 @@ def handle_speech():
     except Exception as e:
         print(e)
         thanks = read_question_from_json(lang, batch, THANKS, "messages")
-        response.Say(
+        response.say(
             thanks,
             language=f'{lang}', 
             voice=voice_model #'Google.he-IL-Standard-A'
