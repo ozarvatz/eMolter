@@ -46,7 +46,7 @@
             <thead>
                 <tr>
                     <th>Date</th>
-                    <th>Patient Phone</th>
+                    <th>Patient</th>
                     <th>Question ID</th>
                     <th>Status</th>
                     <th>Pitch (Hz)</th>
@@ -59,7 +59,10 @@
                 {% for call in recent_calls %}
                 <tr>
                     <td>{{ call.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                    <td>{{ call.patient_phone }}</td>
+                    <td>
+                        {% set patient = phone_to_patient.get(call.patient_phone) %}
+                        {{ patient.nickname if patient and patient.nickname else (patient.name if patient else call.patient_phone) }}
+                    </td>
                     <td>{{ call.question_id }}</td>
                     <td>
                         {% if call.is_processed %}
@@ -181,26 +184,27 @@
                     <span aria-hidden="true">&times;</span>
                 </button>
                 <h4 class="modal-title" id="prosodyModalLabel{{ call.id }}">
-                    Prosody Analysis - {{ call.patient_phone }} - {{ call.created_at.strftime('%Y-%m-%d %H:%M') }}
+                    {% set patient = phone_to_patient.get(call.patient_phone) %}
+                    Prosody Analysis - {{ patient.nickname if patient and patient.nickname else (patient.name if patient else call.patient_phone) }} - {{ call.created_at.strftime('%Y-%m-%d %H:%M') }}
                 </h4>
             </div>
             <div class="modal-body">
                 <h5>Basic Voice Metrics</h5>
                 <table class="table table-bordered table-condensed">
                     <tr>
-                        <th>Mean Pitch</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_pitch_hz').explanation if prosody_params.get('mean_pitch_hz') else '' }}">Mean Pitch</th>
                         <td>{{ "%.2f"|format(call.prosody_results['mean_pitch_hz']) }} Hz</td>
-                        <th>Mean Intensity</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_intensity_db').explanation if prosody_params.get('mean_intensity_db') else '' }}">Mean Intensity</th>
                         <td>{{ "%.2f"|format(call.prosody_results['mean_intensity_db']) if call.prosody_results.get('mean_intensity_db') else 'N/A' }} dB</td>
                     </tr>
                     <tr>
-                        <th>Mean HNR</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_hnr_db').explanation if prosody_params.get('mean_hnr_db') else '' }}">Mean HNR</th>
                         <td>{{ "%.2f"|format(call.prosody_results['mean_hnr_db']) }} dB</td>
-                        <th>Formant F1</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('f1_mean_hz').explanation if prosody_params.get('f1_mean_hz') else '' }}">Formant F1</th>
                         <td>{{ "%.2f"|format(call.prosody_results['f1_mean_hz']) }} Hz</td>
                     </tr>
                     <tr>
-                        <th>Formant F2</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('f2_mean_hz').explanation if prosody_params.get('f2_mean_hz') else '' }}">Formant F2</th>
                         <td>{{ "%.2f"|format(call.prosody_results['f2_mean_hz']) }} Hz</td>
                         <th></th>
                         <td></td>
@@ -212,27 +216,27 @@
                 <table class="table table-bordered table-condensed">
                     {% set vqs = call.prosody_results['voice_quality_stats'] %}
                     <tr>
-                        <th>Duration</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('from_0_to_0_seconds_duration').explanation if prosody_params.get('from_0_to_0_seconds_duration') else '' }}">Duration</th>
                         <td>{{ "%.2f"|format(vqs.get('from_0_to_0_seconds_duration', 0)) }} s</td>
-                        <th>Number of Pulses</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('number_of_pulses').explanation if prosody_params.get('number_of_pulses') else '' }}">Number of Pulses</th>
                         <td>{{ vqs.get('number_of_pulses', 0)|int }}</td>
                     </tr>
                     <tr>
-                        <th>Median Pitch</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('median_pitch').explanation if prosody_params.get('median_pitch') else '' }}">Median Pitch</th>
                         <td>{{ "%.2f"|format(vqs.get('median_pitch', 0)) }} Hz</td>
-                        <th>Pitch Std Dev</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('standard_deviation').explanation if prosody_params.get('standard_deviation') else '' }}">Pitch Std Dev</th>
                         <td>{{ "%.2f"|format(vqs.get('standard_deviation', 0)) }}</td>
                     </tr>
                     <tr>
-                        <th>Min Pitch</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('minimum_pitch').explanation if prosody_params.get('minimum_pitch') else '' }}">Min Pitch</th>
                         <td>{{ "%.2f"|format(vqs.get('minimum_pitch', 0)) }} Hz</td>
-                        <th>Max Pitch</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('maximum_pitch').explanation if prosody_params.get('maximum_pitch') else '' }}">Max Pitch</th>
                         <td>{{ "%.2f"|format(vqs.get('maximum_pitch', 0)) }} Hz</td>
                     </tr>
                     <tr>
-                        <th>Voice Breaks</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('number_of_voice_breaks').explanation if prosody_params.get('number_of_voice_breaks') else '' }}">Voice Breaks</th>
                         <td>{{ vqs.get('number_of_voice_breaks', 0)|int }}</td>
-                        <th>Degree of Voice Breaks</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('degree_of_voice_breaks').explanation if prosody_params.get('degree_of_voice_breaks') else '' }}">Degree of Voice Breaks</th>
                         <td>{{ "%.2f"|format(vqs.get('degree_of_voice_breaks', 0)) }}%</td>
                     </tr>
                 </table>
@@ -240,15 +244,15 @@
                 <h5>Jitter (Voice Stability)</h5>
                 <table class="table table-bordered table-condensed">
                     <tr>
-                        <th>Jitter Local</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('jitter_local').explanation if prosody_params.get('jitter_local') else '' }}">Jitter Local</th>
                         <td>{{ "%.3f"|format(vqs.get('jitter_local', 0)) }}%</td>
-                        <th>Jitter RAP</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('jitter_rap').explanation if prosody_params.get('jitter_rap') else '' }}">Jitter RAP</th>
                         <td>{{ "%.3f"|format(vqs.get('jitter_rap', 0)) }}%</td>
                     </tr>
                     <tr>
-                        <th>Jitter PPQ5</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('jitter_ppq5').explanation if prosody_params.get('jitter_ppq5') else '' }}">Jitter PPQ5</th>
                         <td>{{ "%.3f"|format(vqs.get('jitter_ppq5', 0)) }}%</td>
-                        <th>Jitter DDP</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('jitter_ddp').explanation if prosody_params.get('jitter_ddp') else '' }}">Jitter DDP</th>
                         <td>{{ "%.3f"|format(vqs.get('jitter_ddp', 0)) }}%</td>
                     </tr>
                 </table>
@@ -256,21 +260,21 @@
                 <h5>Shimmer (Amplitude Variation)</h5>
                 <table class="table table-bordered table-condensed">
                     <tr>
-                        <th>Shimmer Local</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('shimmer_local').explanation if prosody_params.get('shimmer_local') else '' }}">Shimmer Local</th>
                         <td>{{ "%.3f"|format(vqs.get('shimmer_local', 0)) }}%</td>
-                        <th>Shimmer Local (dB)</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('shimmer_local,_db').explanation if prosody_params.get('shimmer_local,_db') else '' }}">Shimmer Local (dB)</th>
                         <td>{{ "%.3f"|format(vqs.get('shimmer_local,_db', 0)) }} dB</td>
                     </tr>
                     <tr>
-                        <th>Shimmer APQ3</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('shimmer_apq3').explanation if prosody_params.get('shimmer_apq3') else '' }}">Shimmer APQ3</th>
                         <td>{{ "%.3f"|format(vqs.get('shimmer_apq3', 0)) }}%</td>
-                        <th>Shimmer APQ5</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('shimmer_apq5').explanation if prosody_params.get('shimmer_apq5') else '' }}">Shimmer APQ5</th>
                         <td>{{ "%.3f"|format(vqs.get('shimmer_apq5', 0)) }}%</td>
                     </tr>
                     <tr>
-                        <th>Shimmer APQ11</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('shimmer_apq11').explanation if prosody_params.get('shimmer_apq11') else '' }}">Shimmer APQ11</th>
                         <td>{{ "%.3f"|format(vqs.get('shimmer_apq11', 0)) }}%</td>
-                        <th>Shimmer DDA</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('shimmer_dda').explanation if prosody_params.get('shimmer_dda') else '' }}">Shimmer DDA</th>
                         <td>{{ "%.3f"|format(vqs.get('shimmer_dda', 0)) }}%</td>
                     </tr>
                 </table>
@@ -278,13 +282,13 @@
                 <h5>Harmonics & Noise</h5>
                 <table class="table table-bordered table-condensed">
                     <tr>
-                        <th>Mean Autocorrelation</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_autocorrelation').explanation if prosody_params.get('mean_autocorrelation') else '' }}">Mean Autocorrelation</th>
                         <td>{{ "%.6f"|format(vqs.get('mean_autocorrelation', 0)) }}</td>
-                        <th>Noise-to-Harmonics Ratio</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_noise-to-harmonics_ratio').explanation if prosody_params.get('mean_noise-to-harmonics_ratio') else '' }}">Noise-to-Harmonics Ratio</th>
                         <td>{{ "%.6f"|format(vqs.get('mean_noise-to-harmonics_ratio', 0)) }}</td>
                     </tr>
                     <tr>
-                        <th>Harmonics-to-Noise Ratio</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_harmonics-to-noise_ratio').explanation if prosody_params.get('mean_harmonics-to-noise_ratio') else '' }}">Harmonics-to-Noise Ratio</th>
                         <td colspan="3">{{ "%.3f"|format(vqs.get('mean_harmonics-to-noise_ratio', 0)) }} dB</td>
                     </tr>
                 </table>
@@ -292,15 +296,15 @@
                 <h5>Voicing Statistics</h5>
                 <table class="table table-bordered table-condensed">
                     <tr>
-                        <th>Locally Unvoiced Frames</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('fraction_of_locally_unvoiced_frames').explanation if prosody_params.get('fraction_of_locally_unvoiced_frames') else '' }}">Locally Unvoiced Frames</th>
                         <td>{{ "%.2f"|format(vqs.get('fraction_of_locally_unvoiced_frames', 0)) }}%</td>
-                        <th>Number of Periods</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('number_of_periods').explanation if prosody_params.get('number_of_periods') else '' }}">Number of Periods</th>
                         <td>{{ vqs.get('number_of_periods', 0)|int }}</td>
                     </tr>
                     <tr>
-                        <th>Mean Period</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_period').explanation if prosody_params.get('mean_period') else '' }}">Mean Period</th>
                         <td>{{ "%.3f"|format(vqs.get('mean_period', 0)) }} ms</td>
-                        <th>Period Std Dev</th>
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('standard_deviation_of_period').explanation if prosody_params.get('standard_deviation_of_period') else '' }}">Period Std Dev</th>
                         <td>{{ "%.3f"|format(vqs.get('standard_deviation_of_period', 0)) }} ms</td>
                     </tr>
                 </table>
@@ -315,4 +319,27 @@
 {% endif %}
 {% endfor %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function(){
+    // Initialize Bootstrap tooltips
+    $('[data-toggle="tooltip"]').tooltip({
+        html: true,
+        placement: 'top',
+        container: 'body'
+    });
+});
+</script>
+<style>
+.param-label {
+    cursor: help;
+    border-bottom: 1px dotted #999;
+}
+.tooltip-inner {
+    max-width: 400px;
+    text-align: left;
+}
+</style>
 {% endblock %}

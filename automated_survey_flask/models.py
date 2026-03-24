@@ -173,3 +173,19 @@ class User(UserMixin, db.Model):
     def active(cls):
         return cls.query.filter_by(deleted=False)
 
+
+class ProsodyParameter(db.Model):
+    __tablename__ = 'prosody_parameters'
+
+    id = db.Column(db.Integer, primary_key=True)
+    parameter_key = db.Column(db.String(100), unique=True, nullable=False)
+    parameter_name = db.Column(db.String(200), nullable=False)
+    explanation = db.Column(db.Text, nullable=False)
+    category = db.Column(db.String(50), nullable=True)
+
+    def __init__(self, parameter_key, parameter_name, explanation, category=None):
+        self.parameter_key = parameter_key
+        self.parameter_name = parameter_name
+        self.explanation = explanation
+        self.category = category
+

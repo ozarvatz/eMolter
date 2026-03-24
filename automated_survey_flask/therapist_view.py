@@ -1,7 +1,7 @@
 from flask import render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
 from automated_survey_flask import app, db
-from automated_survey_flask.models import Patient, Call
+from automated_survey_flask.models import Patient, Call, ProsodyParameter
 from twilio.rest import Client
 import os
 from urllib.parse import quote
@@ -23,6 +23,12 @@ def dashboard():
 
     patients = Patient.active().filter_by(therapist_id=current_user.id).all()
 
+    # Create phone to patient mapping for displaying nicknames
+    phone_to_patient = {p.phone: p for p in patients}
+
+    # Get prosody parameter explanations
+    prosody_params = {p.parameter_key: p for p in ProsodyParameter.query.all()}
+
     # Get paginated calls
     calls_query = Call.query.filter(
         Call.patient_phone.in_([p.phone for p in patients])
@@ -39,7 +45,9 @@ def dashboard():
 
     return render_template('dashboard.html', patients=patients,
                          recent_calls=recent_calls, stats=stats,
-                         pagination=calls_pagination)
+                         pagination=calls_pagination,
+                         phone_to_patient=phone_to_patient,
+                         prosody_params=prosody_params)
 
 
 @app.route('/patients')
