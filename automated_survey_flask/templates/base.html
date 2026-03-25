@@ -26,6 +26,7 @@
             <ul class="nav navbar-nav navbar-right">
                 {% if current_user.is_authenticated %}
                     <li><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+                    <li><a href="{{ url_for('analytics') }}">Analytics</a></li>
                     <li><a href="{{ url_for('patient_list') }}">Patients</a></li>
                     {% if current_user.is_superuser %}
                         <li><a href="{{ url_for('therapist_list') }}">Therapists</a></li>

@@ -1,0 +1,475 @@
+{% extends "base.html" %}
+{% block title %}Analytics Dashboard - eMolter{% endblock %}
+
+{% block content %}
+<h1>Analytics Dashboard</h1>
+
+<!-- Filters -->
+<div class="well">
+    <form id="filterForm" class="form-inline">
+        <div class="form-group" style="margin-right: 15px;">
+            <label for="patientSelect">Patients:</label>
+            <select id="patientSelect" multiple class="form-control" style="width: 300px; height: 100px;">
+                {% for patient in patients %}
+                <option value="{{ patient.id }}" selected>{{ patient.nickname or patient.name }}</option>
+                {% endfor %}
+            </select>
+            <p class="help-block"><small>Hold Ctrl/Cmd to select multiple</small></p>
+        </div>
+
+        <div class="form-group" style="margin-right: 15px;">
+            <label for="daysSelect">Time Range:</label>
+            <select id="daysSelect" class="form-control">
+                <option value="7">Last 7 days</option>
+                <option value="30" selected>Last 30 days</option>
+                <option value="60">Last 60 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="180">Last 6 months</option>
+                <option value="365">Last year</option>
+            </select>
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+            <span class="glyphicon glyphicon-refresh"></span> Update Graphs
+        </button>
+
+        <button type="button" id="selectAllBtn" class="btn btn-default">Select All</button>
+        <button type="button" id="deselectAllBtn" class="btn btn-default">Deselect All</button>
+    </form>
+</div>
+
+<!-- Loading indicator -->
+<div id="loadingIndicator" class="alert alert-info" style="display: none;">
+    <span class="glyphicon glyphicon-refresh spinning"></span> Loading data...
+</div>
+
+<!-- Graphs Container -->
+<div id="graphsContainer">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="panel panel-default">
+                <div class="panel-heading"><strong>Mean Pitch (Hz)</strong></div>
+                <div class="panel-body">
+                    <div id="pitchMeanGraph" style="height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="panel panel-default">
+                <div class="panel-heading"><strong>Pitch Standard Deviation (Hz)</strong></div>
+                <div class="panel-body">
+                    <div id="pitchSdGraph" style="height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="panel panel-default">
+                <div class="panel-heading"><strong>Shimmer Local (%)</strong></div>
+                <div class="panel-body">
+                    <div id="shimmerGraph" style="height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="panel panel-default">
+                <div class="panel-heading"><strong>Jitter Local (%)</strong></div>
+                <div class="panel-body">
+                    <div id="jitterGraph" style="height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="panel panel-default">
+                <div class="panel-heading"><strong>Harmonics-to-Noise Ratio (dB)</strong></div>
+                <div class="panel-body">
+                    <div id="hnrGraph" style="height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="panel panel-default">
+                <div class="panel-heading"><strong>Voice Breaks (%)</strong></div>
+                <div class="panel-body">
+                    <div id="voiceBreaksGraph" style="height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<!-- Plotly.js -->
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+<style>
+.spinning {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.help-block {
+    margin-top: 5px;
+    margin-bottom: 0;
+}
+</style>
+
+<script>
+$(document).ready(function() {
+    // Color palette for different patients
+    const colors = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
+    ];
+
+    // Select/Deselect all buttons
+    $('#selectAllBtn').click(function() {
+        $('#patientSelect option').prop('selected', true);
+    });
+
+    $('#deselectAllBtn').click(function() {
+        $('#patientSelect option').prop('selected', false);
+    });
+
+    // Form submission
+    $('#filterForm').submit(function(e) {
+        e.preventDefault();
+        loadGraphData();
+    });
+
+    // Load data on page load
+    loadGraphData();
+
+    function loadGraphData() {
+        const selectedPatients = $('#patientSelect').val() || [];
+        const days = $('#daysSelect').val();
+
+        // Show loading indicator
+        $('#loadingIndicator').show();
+        $('#graphsContainer').css('opacity', '0.5');
+
+        // Build query parameters
+        const params = new URLSearchParams();
+        selectedPatients.forEach(id => params.append('patient_ids[]', id));
+        params.append('days', days);
+
+        // Fetch data
+        $.ajax({
+            url: '/api/analytics/data?' + params.toString(),
+            method: 'GET',
+            xhrFields: {
+                withCredentials: true
+            },
+            success: function(data, textStatus, xhr) {
+                console.log('Response received:', data);
+                if (data.error) {
+                    alert('Error loading data: ' + data.error);
+                } else if (Object.keys(data).length === 0) {
+                    alert('No data found for selected filters. Try selecting more patients or a larger time range.');
+                } else {
+                    renderGraphs(data);
+                }
+                $('#loadingIndicator').hide();
+                $('#graphsContainer').css('opacity', '1');
+            },
+            error: function(xhr, status, error) {
+                console.error('AJAX Error Status:', status);
+                console.error('AJAX Error:', error);
+                console.error('Response Text:', xhr.responseText);
+                console.error('Response Status:', xhr.status);
+
+                // Show first 500 chars of response
+                console.error('Response Preview:', xhr.responseText.substring(0, 500));
+
+                let errorMsg = 'Error loading data: ' + error;
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    errorMsg = 'Error: ' + xhr.responseJSON.error;
+                }
+                alert(errorMsg + '\n\nCheck browser console (F12) for details.');
+                $('#loadingIndicator').hide();
+                $('#graphsContainer').css('opacity', '1');
+            }
+        });
+    }
+
+    function renderGraphs(dataByPatient) {
+        const patientNames = Object.keys(dataByPatient);
+
+        // Common layout configuration
+        const commonLayout = {
+            hovermode: 'closest',
+            showlegend: true,
+            legend: {
+                orientation: 'h',
+                y: -0.2
+            },
+            margin: { t: 20, b: 80, l: 60, r: 20 }
+        };
+
+        // 1. Pitch Mean Graph
+        const pitchMeanTraces = patientNames.map((name, idx) => {
+            const sampleNumbers = dataByPatient[name].dates.map((_, i) => i + 1);
+            return {
+                x: sampleNumbers,
+                y: dataByPatient[name].pitch_mean,
+                text: dataByPatient[name].dates,
+                name: name,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: colors[idx % colors.length] },
+                marker: { size: 6 },
+                hovertemplate: '<b>' + name + '</b><br>Sample: %{x}<br>Date: %{text}<br>Pitch: %{y:.2f} Hz<extra></extra>'
+            };
+        });
+
+        Plotly.newPlot('pitchMeanGraph', pitchMeanTraces, {
+            ...commonLayout,
+            xaxis: { title: 'Sample Number' },
+            yaxis: { title: 'Pitch (Hz)' }
+        }, { responsive: true });
+
+        // 2. Pitch SD Graph with threshold zones
+        const pitchSdTraces = patientNames.map((name, idx) => {
+            const sampleNumbers = dataByPatient[name].dates.map((_, i) => i + 1);
+            return {
+                x: sampleNumbers,
+                y: dataByPatient[name].pitch_sd,
+                text: dataByPatient[name].dates,
+                name: name,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: colors[idx % colors.length] },
+                marker: { size: 6 },
+                hovertemplate: '<b>' + name + '</b><br>Sample: %{x}<br>Date: %{text}<br>Pitch SD: %{y:.2f} Hz<extra></extra>'
+            };
+        });
+
+        Plotly.newPlot('pitchSdGraph', pitchSdTraces, {
+            ...commonLayout,
+            xaxis: { title: 'Sample Number' },
+            yaxis: { title: 'Standard Deviation (Hz)' }
+        }, { responsive: true });
+
+        // 3. Shimmer Graph with threshold zones
+        const shimmerTraces = patientNames.map((name, idx) => {
+            const sampleNumbers = dataByPatient[name].dates.map((_, i) => i + 1);
+            return {
+                x: sampleNumbers,
+                y: dataByPatient[name].shimmer,
+                text: dataByPatient[name].dates,
+                name: name,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: colors[idx % colors.length] },
+                marker: { size: 6 },
+                hovertemplate: '<b>' + name + '</b><br>Sample: %{x}<br>Date: %{text}<br>Shimmer: %{y:.2f}%<extra></extra>'
+            };
+        });
+
+        // Add threshold zones
+        const shimmerShapes = [
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 0,
+                y1: 3,
+                fillcolor: 'green',
+                opacity: 0.1,
+                line: { width: 0 }
+            },
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 3,
+                y1: 5,
+                fillcolor: 'yellow',
+                opacity: 0.1,
+                line: { width: 0 }
+            },
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 5,
+                y1: 20,
+                fillcolor: 'red',
+                opacity: 0.1,
+                line: { width: 0 }
+            }
+        ];
+
+        Plotly.newPlot('shimmerGraph', shimmerTraces, {
+            ...commonLayout,
+            xaxis: { title: 'Sample Number' },
+            yaxis: { title: 'Shimmer (%)' },
+            shapes: shimmerShapes
+        }, { responsive: true });
+
+        // 4. Jitter Graph with threshold zones
+        const jitterTraces = patientNames.map((name, idx) => {
+            const sampleNumbers = dataByPatient[name].dates.map((_, i) => i + 1);
+            return {
+                x: sampleNumbers,
+                y: dataByPatient[name].jitter,
+                text: dataByPatient[name].dates,
+                name: name,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: colors[idx % colors.length] },
+                marker: { size: 6 },
+                hovertemplate: '<b>' + name + '</b><br>Sample: %{x}<br>Date: %{text}<br>Jitter: %{y:.2f}%<extra></extra>'
+            };
+        });
+
+        const jitterShapes = [
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 0,
+                y1: 1,
+                fillcolor: 'green',
+                opacity: 0.1,
+                line: { width: 0 }
+            },
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 1,
+                y1: 2,
+                fillcolor: 'yellow',
+                opacity: 0.1,
+                line: { width: 0 }
+            },
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 2,
+                y1: 10,
+                fillcolor: 'red',
+                opacity: 0.1,
+                line: { width: 0 }
+            }
+        ];
+
+        Plotly.newPlot('jitterGraph', jitterTraces, {
+            ...commonLayout,
+            xaxis: { title: 'Sample Number' },
+            yaxis: { title: 'Jitter (%)' },
+            shapes: jitterShapes
+        }, { responsive: true });
+
+        // 5. HNR Graph with threshold zones
+        const hnrTraces = patientNames.map((name, idx) => {
+            const sampleNumbers = dataByPatient[name].dates.map((_, i) => i + 1);
+            return {
+                x: sampleNumbers,
+                y: dataByPatient[name].hnr,
+                text: dataByPatient[name].dates,
+                name: name,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: colors[idx % colors.length] },
+                marker: { size: 6 },
+                hovertemplate: '<b>' + name + '</b><br>Sample: %{x}<br>Date: %{text}<br>HNR: %{y:.2f} dB<extra></extra>'
+            };
+        });
+
+        const hnrShapes = [
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 15,
+                y1: 40,
+                fillcolor: 'green',
+                opacity: 0.1,
+                line: { width: 0 }
+            },
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 10,
+                y1: 15,
+                fillcolor: 'yellow',
+                opacity: 0.1,
+                line: { width: 0 }
+            },
+            {
+                type: 'rect',
+                xref: 'paper',
+                yref: 'y',
+                x0: 0,
+                x1: 1,
+                y0: 0,
+                y1: 10,
+                fillcolor: 'red',
+                opacity: 0.1,
+                line: { width: 0 }
+            }
+        ];
+
+        Plotly.newPlot('hnrGraph', hnrTraces, {
+            ...commonLayout,
+            xaxis: { title: 'Sample Number' },
+            yaxis: { title: 'HNR (dB)' },
+            shapes: hnrShapes
+        }, { responsive: true });
+
+        // 6. Voice Breaks Graph
+        const voiceBreaksTraces = patientNames.map((name, idx) => {
+            const sampleNumbers = dataByPatient[name].dates.map((_, i) => i + 1);
+            return {
+                x: sampleNumbers,
+                y: dataByPatient[name].voice_breaks,
+                text: dataByPatient[name].dates,
+                name: name,
+                type: 'scatter',
+                mode: 'lines+markers',
+                line: { color: colors[idx % colors.length] },
+                marker: { size: 6 },
+                hovertemplate: '<b>' + name + '</b><br>Sample: %{x}<br>Date: %{text}<br>Voice Breaks: %{y:.2f}%<extra></extra>'
+            };
+        });
+
+        Plotly.newPlot('voiceBreaksGraph', voiceBreaksTraces, {
+            ...commonLayout,
+            xaxis: { title: 'Sample Number' },
+            yaxis: { title: 'Voice Breaks (%)' }
+        }, { responsive: true });
+    }
+});
+</script>
+{% endblock %}
