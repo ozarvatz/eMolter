@@ -8,6 +8,11 @@ import re
 from parselmouth.praat import call
 from automated_survey_flask import app
 from automated_survey_flask.models import db, Call
+import torch
+import librosa
+from transformers import pipeline
+
+classifier = pipeline("audio-classification", model="harshit345/xlsr-wav2vec-speech-emotion-recognition")
 
 def parse_voice_report(report_str):
     """Converts the raw Praat text report into a dictionary."""
@@ -55,6 +60,39 @@ def get_voice_health_score(voice_stats):
     score = (jitter_norm * 0.2) + (shimmer_norm * 0.2) + (hnr_norm * 0.5) + (breaks_norm * 0.1)
     
     return round(max(0.0, min(score, 1.0)), 3)
+
+def analyze_emotions(audio_path, sr=16000):
+    """
+    Analyzes the emotional content of an audio recording using 
+    the Wav2Vec 2.0 XLSR model.
+    
+    Processes the raw audio signal to extract probability scores for 
+    Happiness, Anger, Sadness, Disgust, and Fear based on acoustic 
+    features and speech patterns.
+    
+    Args:
+        audio_path (str): Path to the Twilio .wav recording.
+        sr (int): Target sampling rate (standard 16kHz for AI models).
+        
+    Returns:
+        dict: A mapping of emotion labels to their confidence scores.
+
+    *** The model was trained on a dataset called AESDD (Acted Emotional Speech Dynamic Database)
+    """
+    # 1. Load and Resample
+    speech, sr = librosa.load(audio_path, sr=16000)
+
+    # 2. Pass the 'speech' variable (the numbers) to the AI, not the file path
+    results = classifier(speech) 
+
+    normal_result = {}
+    for element in results:
+        normal_result[element["label"]] = element["score"] 
+    # 3. Output the result
+    print(normal_result)
+
+    return normal_result
+
 
 """
 the function return's json with the follow parameters: 
@@ -155,6 +193,7 @@ def get_prosody_features(url, channel_index=1):
                 features["speaking_ratio"] = 0.0
 
             features["total_duration"] = sound.get_total_duration()
+            features["sentiment"] = analyze_emotions(tmp_path, sr=16000)
 
             return features
 

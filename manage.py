@@ -124,6 +124,13 @@ def seed_prosody_params():
         ('number_of_periods', 'Number of Periods', 'Total number of pitch periods detected. More periods allow more reliable analysis.', 'voicing'),
         ('mean_period', 'Mean Period', 'Average pitch period duration in milliseconds. Inversely related to pitch (longer period = lower pitch).', 'voicing'),
         ('standard_deviation_of_period', 'Period Std Dev', 'Variability in pitch period duration (ms). Related to jitter measurements.', 'voicing'),
+
+        # Sentiment Analysis (AESDD / Wav2Vec 2.0 XLSR model)
+        ('sentiment_happiness', 'Happiness', 'Probability that the speaker sounds happy. High values indicate positive emotional tone, engagement, or relief.', 'sentiment'),
+        ('sentiment_anger', 'Anger', 'Probability that the speaker sounds angry. Elevated values may reflect frustration, agitation, or hostility.', 'sentiment'),
+        ('sentiment_sadness', 'Sadness', 'Probability that the speaker sounds sad. High values may indicate low mood, grief, or depressive affect.', 'sentiment'),
+        ('sentiment_disgust', 'Disgust', 'Probability that the speaker expresses disgust. May reflect strong aversion or contempt in vocal tone.', 'sentiment'),
+        ('sentiment_fear', 'Fear', 'Probability that the speaker sounds fearful or anxious. High values may indicate distress or heightened arousal.', 'sentiment'),
     ]
 
     for param_key, param_name, explanation, category in parameters:

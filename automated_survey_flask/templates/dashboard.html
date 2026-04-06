@@ -53,6 +53,7 @@
                     <th>Voice Quality (HNR)</th>
                     <th>Shimmer (%)</th>
                     <th>Jitter (%)</th>
+                    <th>Top Emotion</th>
                 </tr>
             </thead>
             <tbody>
@@ -122,6 +123,23 @@
                             <span class="text-muted">-</span>
                         {% endif %}
                     </td>
+                    <td>
+                        {% if call.is_processed and call.prosody_results and call.prosody_results.get('sentiment') %}
+                            {% set sentiment = call.prosody_results['sentiment'] %}
+                            {% set top = namespace(label='', score=0) %}
+                            {% for label, score in sentiment.items() %}
+                                {% if score > top.score %}
+                                    {% set top.label = label %}
+                                    {% set top.score = score %}
+                                {% endif %}
+                            {% endfor %}
+                            <span class="{% if top.label == 'happiness' %}text-success{% elif top.label in ['anger', 'disgust'] %}text-danger{% elif top.label in ['sadness', 'fear'] %}text-warning{% endif %}">
+                                {{ top.label|capitalize }} ({{ "%.0f"|format(top.score * 100) }}%)
+                            </span>
+                        {% else %}
+                            <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -167,6 +185,9 @@
                 Jitter: <span class="text-success">Good (&lt;1%)</span>,
                 <span class="text-warning">Fair (1-2%)</span>,
                 <span class="text-danger">Poor (&gt;2%)</span> |
+                Emotion: <span class="text-success">Happiness</span>,
+                <span class="text-warning">Sadness / Fear</span>,
+                <span class="text-danger">Anger / Disgust</span> |
                 Click "Processed" to view all prosody details
             </small>
         </div>
@@ -306,6 +327,30 @@
                         <td>{{ "%.3f"|format(vqs.get('mean_period', 0)) }} ms</td>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('standard_deviation_of_period').explanation if prosody_params.get('standard_deviation_of_period') else '' }}">Period Std Dev</th>
                         <td>{{ "%.3f"|format(vqs.get('standard_deviation_of_period', 0)) }} ms</td>
+                    </tr>
+                </table>
+                {% endif %}
+
+                {% if call.prosody_results.get('sentiment') %}
+                <h5>Sentiment Analysis</h5>
+                <table class="table table-bordered table-condensed">
+                    <tr>
+                        {% for emotion in ['happiness', 'anger', 'sadness', 'disgust', 'fear'] %}
+                        <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('sentiment_' + emotion).explanation if prosody_params.get('sentiment_' + emotion) else '' }}">
+                            {{ emotion|capitalize }}
+                        </th>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        {% set sentiment = call.prosody_results['sentiment'] %}
+                        {% for emotion in ['happiness', 'anger', 'sadness', 'disgust', 'fear'] %}
+                        {% set score = sentiment.get(emotion, 0) %}
+                        <td>
+                            <span class="{% if emotion == 'happiness' and score > 0.4 %}text-success{% elif emotion in ['anger', 'disgust'] and score > 0.3 %}text-danger{% elif emotion in ['sadness', 'fear'] and score > 0.3 %}text-warning{% endif %}">
+                                {{ "%.1f"|format(score * 100) }}%
+                            </span>
+                        </td>
+                        {% endfor %}
                     </tr>
                 </table>
                 {% endif %}
