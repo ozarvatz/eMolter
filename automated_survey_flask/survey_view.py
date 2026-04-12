@@ -80,7 +80,7 @@ def voice_survey():
         start.transcription(
             language_code=f'{lang}', 
             # language=f'{lang}',
-            status_callback_url=f'http://{request.host}/handle-realtime-text?batch={batch}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
+            status_callback_url=f'https://www.emolter.org:5000/handle-realtime-text?batch={batch}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
         )
         response.append(start)
     
@@ -415,7 +415,7 @@ def send_whatsapp_report(sender, to):
 
     # 2. Define the public URL for the file
     # Replace with your actual domain or ngrok URL
-    base_url = "http://188.166.110.236:5000"
+    base_url = "https://www.emolter.org:5000"
     formatted_from = f"whatsapp:+{sender}" if not sender.startswith('whatsapp:') else sender
     formatted_to = f"whatsapp:+{to}" if not to.startswith('whatsapp:') else to
     secret_url = f"{base_url}/download/{unique_id}"
@@ -433,7 +433,7 @@ def send_whatsapp_report(sender, to):
 def whatsapp_reply():
     sender_phone = request.values.get('From', '').replace('whatsapp:+', '')
     incoming_msg = request.values.get('Body', '').lower()
-    base_url = "http://188.166.110.236:5000"
+    base_url = "https://www.emolter.org:5000"
     allowed_list = ALLOWED_PHONES #get_allowed_phones() # From your .bashrc environment variable
     
     resp = MessagingResponse()

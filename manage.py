@@ -1,4 +1,4 @@
-from flask_script import Manager
+from flask_script import Manager, Server
 from flask_migrate import Migrate, MigrateCommand
 
 # from flask_migrate import upgrade as upgrade_database
@@ -11,6 +11,15 @@ migrate = Migrate(app, db)
 manager = Manager(app)
 manager.add_command('db', MigrateCommand)
 
+@manager.command
+def runserver(host='0.0.0.0', port=5000, no_reload=False):
+    """Runs the server with SSL forced."""
+    app.run(
+        host=host,
+        port=int(port),
+        use_reloader=not no_reload,
+        ssl_context=('cert/emolter_org.crt', 'cert/emolter.key')
+    )
 
 @manager.command
 def test():

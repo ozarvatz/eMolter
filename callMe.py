@@ -36,7 +36,7 @@ def initiate_survey_call():
     # YOUR_NUMBER = "+972503220778"  #OZ ⬅️ The number you want to call
     # YOUR_NUMBER = "+972546646637"  #Seev ⬅️ The number you want to call
     #NGROK_URL = "https://expectative-refugio-bizarrely.ngrok-free.dev" # ⬅️ Your live Ngrok URL
-    NGROK_URL = "http://188.166.110.236:5000"
+    NGROK_URL = "https://www.emolter.org:5000"
     # Check for placeholder values
     if TWILIO_NUMBER.startswith("+[") or YOUR_NUMBER.startswith("+[") or "NGROK_ID" in NGROK_URL:
         print("🛑 Error: Please update the TWILIO_NUMBER, YOUR_NUMBER, and NGROK_URL variables in the script.")
