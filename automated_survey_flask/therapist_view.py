@@ -1,4 +1,7 @@
-from flask import render_template, request, redirect, url_for, flash, abort
+import io
+import json
+import pandas as pd
+from flask import render_template, request, redirect, url_for, flash, abort, make_response
 from flask_login import login_required, current_user
 from automated_survey_flask import app, db
 from automated_survey_flask.models import Patient, Call, ProsodyParameter
@@ -124,7 +127,7 @@ def patient_call(id):
     client = Client(account_sid, auth_token)
 
     TWILIO_NUMBER = "+17473023043"
-    NGROK_URL = "http://188.166.110.236:5000"
+    NGROK_URL = "https://www.emolter.org:5000"
 
     try:
         call = client.calls.create(
@@ -140,3 +143,35 @@ def patient_call(id):
         flash(f'Call failed: {str(e)}', 'error')
 
     return redirect(url_for('dashboard'))
+
+
+@app.route('/export-csv')
+@login_required
+def export_csv():
+    if current_user.is_superuser:
+        query = db.session.query(Call)
+    else:
+        patients = Patient.active().filter_by(therapist_id=current_user.id).all()
+        phones = [p.phone for p in patients]
+        query = db.session.query(Call).filter(Call.patient_phone.in_(phones))
+
+    df = pd.read_sql(query.statement, db.engine)
+
+    if df.empty:
+        flash('No data available to export.', 'warning')
+        return redirect(url_for('dashboard'))
+
+    json_struct = df['prosody_results'].apply(
+        lambda x: x if isinstance(x, dict) else json.loads(x or '{}')
+    )
+    df_json = pd.json_normalize(json_struct)
+    df_final = pd.concat([df.drop('prosody_results', axis=1), df_json], axis=1)
+
+    output = io.StringIO()
+    df_final.to_csv(output, index=False)
+    output.seek(0)
+
+    response = make_response(output.getvalue())
+    response.headers['Content-Disposition'] = 'attachment; filename=prosody_report.csv'
+    response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+    return response
