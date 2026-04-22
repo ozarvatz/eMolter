@@ -61,26 +61,27 @@ def get_voice_health_score(voice_stats):
     
     return round(max(0.0, min(score, 1.0)), 3)
 
-def analyze_emotions(audio_path, sr=16000):
+def analyze_emotions(audio_path, sr=16000, max_seconds=30):
     """
-    Analyzes the emotional content of an audio recording using 
+    Analyzes the emotional content of an audio recording using
     the Wav2Vec 2.0 XLSR model.
-    
-    Processes the raw audio signal to extract probability scores for 
-    Happiness, Anger, Sadness, Disgust, and Fear based on acoustic 
+
+    Processes the raw audio signal to extract probability scores for
+    Happiness, Anger, Sadness, Disgust, and Fear based on acoustic
     features and speech patterns.
-    
+
     Args:
         audio_path (str): Path to the Twilio .wav recording.
         sr (int): Target sampling rate (standard 16kHz for AI models).
-        
+        max_seconds (int): Maximum audio duration to load (avoids OOM on long recordings).
+
     Returns:
         dict: A mapping of emotion labels to their confidence scores.
 
     *** The model was trained on a dataset called AESDD (Acted Emotional Speech Dynamic Database)
     """
-    # 1. Load and Resample
-    speech, sr = librosa.load(audio_path, sr=16000)
+    # 1. Load and Resample (duration cap prevents OOM on long full-call recordings)
+    speech, sr = librosa.load(audio_path, sr=16000, duration=max_seconds)
 
     # 2. Pass the 'speech' variable (the numbers) to the AI, not the file path
     results = classifier(speech) 
@@ -150,7 +151,7 @@ def get_prosody_features(url, channel_index=1):
             num_channels = call(full_sound, "Get number of channels")
             if num_channels > 1:
                 # Only extract if it's actually Stereo
-                sound = call(full_sound, "Extract channel", channel_index)
+                sound = call(full_sound, "Extract one channel", channel_index)
             else:
                 # If it's already Mono, just use the sound as-is
                 sound = full_sound

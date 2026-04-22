@@ -39,6 +39,9 @@ def prepare_app(environment=env, p_db=db):
     csrf.exempt('automated_survey_flask.survey_view.voice_survey')
     csrf.exempt('automated_survey_flask.survey_view.handle_speech')
     csrf.exempt('automated_survey_flask.survey_view.handle_realtime_text')
+    csrf.exempt('automated_survey_flask.llm_survey_view.llm_voice_survey')
+    csrf.exempt('automated_survey_flask.llm_survey_view.llm_handle_speech')
+    csrf.exempt('automated_survey_flask.llm_survey_view.llm_recording_callback')
 
     # load views by importing them
     from . import views # noqa F401

@@ -18,7 +18,7 @@ def runserver(host='0.0.0.0', port=5000, no_reload=False):
         host=host,
         port=int(port),
         use_reloader=not no_reload,
-        ssl_context=('cert/emolter_org.crt', 'cert/emolter.key')
+        ssl_context=('cert/emolter_fullchain.pem', 'cert/emolter.key')
     )
 
 @manager.command

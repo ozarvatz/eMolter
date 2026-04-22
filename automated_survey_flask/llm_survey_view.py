@@ -1,0 +1,362 @@
+import os
+import json
+from urllib.parse import quote
+from datetime import datetime
+
+from flask import request, session, Response, redirect, url_for, flash, abort
+from flask_login import login_required, current_user
+from twilio.rest import Client
+from twilio.twiml.voice_response import VoiceResponse, Gather
+
+from . import app
+from .models import db, Call, Patient
+
+# ---------------------------------------------------------------------------
+# Constants (mirror survey_view.py conventions)
+# ---------------------------------------------------------------------------
+SORRY_FAILED  = 1
+THANKS        = 3
+HELLO         = 4
+VOICE_ALGO    = 1
+
+LLM_MODEL         = os.environ.get('GROQ_MODEL', 'llama-3.1-8b-instant')
+MAX_HISTORY_CHARS = 3000
+TWILIO_NUMBER     = "+17473023043"
+BASE_URL          = "https://www.emolter.org:5000"
+
+# ---------------------------------------------------------------------------
+# Groq client (lazy-initialised so a missing key only fails when routes hit)
+# ---------------------------------------------------------------------------
+_groq_client = None
+
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        from groq import Groq
+        api_key = os.environ.get('GROQ_API_KEY')
+        if not api_key:
+            raise ValueError("GROQ_API_KEY environment variable is not set")
+        _groq_client = Groq(api_key=api_key)
+    return _groq_client
+
+
+# ---------------------------------------------------------------------------
+# JSON helpers (self-contained — survey_view.py not imported to avoid coupling)
+# ---------------------------------------------------------------------------
+def _read_from_json(lang, batch, n, entity):
+    json_path = f"questions_{batch}_{lang}.json"
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    items = data.get(entity, [])
+    if n < 1 or n > len(items):
+        raise IndexError(f"{entity}[{n}] out of range (len={len(items)})")
+    return items[n - 1]["body"]
+
+
+def _get_base_questions(lang, batch):
+    json_path = f"questions_{batch}_{lang}.json"
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return [q["body"] for q in data.get("questions", [])]
+
+
+# ---------------------------------------------------------------------------
+# History helpers  (stored in Call.conversation_text as a JSON array)
+# Each entry: {"q": "<question>", "a": "<answer>"}
+# An empty "a" means the question was asked but the answer hasn't arrived yet.
+# question_id=0 is the sentinel for LLM-survey records.
+# ---------------------------------------------------------------------------
+def _load_history(call_sid):
+    call = Call.query.filter_by(call_sid=call_sid, question_id=0).first()
+    if not call or not call.conversation_text:
+        return []
+    try:
+        return json.loads(call.conversation_text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _save_history(call_sid, history):
+    call = Call.query.filter_by(call_sid=call_sid, question_id=0).first()
+    if call:
+        call.conversation_text = json.dumps(history, ensure_ascii=False)
+        db.session.commit()
+
+
+def _truncate_history(history):
+    """Drop oldest Q&A pairs until the serialised history fits MAX_HISTORY_CHARS."""
+    while len(history) > 1:
+        if len(json.dumps(history, ensure_ascii=False)) <= MAX_HISTORY_CHARS:
+            break
+        history = history[1:]
+    return history
+
+
+# ---------------------------------------------------------------------------
+# LLM call
+# ---------------------------------------------------------------------------
+def _ask_llm(lang, batch, history, q_num, max_questions):
+    """Ask Groq to generate the next survey question."""
+    base_qs  = _get_base_questions(lang, batch)
+    numbered = "\n".join(f"{i+1}. {q}" for i, q in enumerate(base_qs))
+
+    # Build history text (only entries that have a real answer)
+    history_lines = ""
+    for i, entry in enumerate(history):
+        if entry.get('a') and entry['a'] != '[no answer]':
+            history_lines += f"Q{i+1}: {entry['q']}\nA{i+1}: {entry['a']}\n"
+
+    system_prompt = (
+        f"You are a warm, empathetic mental health interviewer conducting a voice survey by phone.\n"
+        f"You MUST reply ONLY in the language matching this locale: {lang}.\n\n"
+        f"Topics to explore during the survey (a flexible guide — NOT a fixed script):\n"
+        f"{numbered}\n\n"
+        f"Rules — follow these strictly:\n"
+        f"1. SKIP any topic the patient already answered directly OR indirectly. "
+        f"If they said they feel terrible, never ask 'are you feeling well?' — that is already answered. "
+        f"Move to a genuinely new angle.\n"
+        f"2. If the patient shared something sad, painful, or difficult, briefly acknowledge it with warmth "
+        f"before moving forward — never ignore their emotional state.\n"
+        f"3. React to what the patient JUST said, not to the fixed topic list. "
+        f"Let the conversation flow naturally from their last answer.\n"
+        f"4. Be warm, informal, and human — like a caring person, not a questionnaire.\n"
+        f"5. Ask exactly ONE short question (one sentence, suitable for a phone call).\n"
+        f"6. Output ONLY the question text — no labels, no preamble, no explanations.\n"
+        f"7. This is question {q_num} of {max_questions} total."
+    )
+
+    user_content = (
+        f"Conversation so far:\n{history_lines}\n\n"
+        f"The patient's last answer was: \"{history[-1]['a'] if history and history[-1].get('a') else ''}\"\n"
+        f"Generate question {q_num}, reacting to what they just said."
+        if history_lines else
+        f"Generate question {q_num} (opening question)."
+    )
+
+    client = _get_groq_client()
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_content},
+        ],
+        max_tokens=80,
+        temperature=0.7,
+    )
+    return resp.choices[0].message.content.strip()
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+@app.route('/llm-voice', methods=['GET', 'POST'])
+def llm_voice_survey():
+    lang         = request.args.get('lang') or 'he-IL'
+    patient_name = request.args.get('name') or 'noname'
+    batch        = request.args.get('batch') or 'basic'
+    call_sid     = request.values.get('CallSid', '')
+    from_phone   = request.args.get('from_phone', '')
+    to_phone     = request.args.get('to_phone', '')
+
+    print(f"+++++ llm_voice_survey {datetime.now()} call_sid={call_sid} +++++")
+
+    twiml      = VoiceResponse()
+    voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
+
+    try:
+        base_qs       = _get_base_questions(lang, batch)
+        max_questions = len(base_qs)
+        sorry         = _read_from_json(lang, batch, SORRY_FAILED, "messages")
+
+        # Q1 always comes from the JSON — it is the greeting and contains the patient name.
+        # The LLM takes over from Q2 onwards.
+        intro_q = _read_from_json(lang, batch, 1, "questions").format(patient_name)
+
+        # Upsert the LLM-survey Call record (question_id=0 sentinel)
+        call_record = (
+            Call.query.filter_by(call_sid=call_sid, question_id=0).first()
+            if call_sid else None
+        )
+        if not call_record and call_sid:
+            call_record = Call(
+                callSid=call_sid,
+                recordSid=None,
+                questionId=0,
+                recordingUrl=None,
+                conversationText='[]',
+                patientPhone=to_phone,
+                carrierPhone=from_phone,
+                questionsFile=f"questions_{batch}_{lang}.json",
+            )
+            db.session.add(call_record)
+            db.session.commit()
+
+        # Store Q1 in history with empty answer placeholder
+        if call_record:
+            call_record.conversation_text = json.dumps(
+                [{"q": intro_q, "a": ""}], ensure_ascii=False
+            )
+            db.session.commit()
+
+        # TwiML: Gather Q1 directly (Q1 itself is the greeting + first question)
+        gather = Gather(
+            input='speech',
+            speech_timeout='auto',
+            language=lang,
+            action=(
+                f'/llm-handle-speech?q_num=1&lang={lang}'
+                f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}'
+            ),
+            method='POST',
+        )
+        gather.say(intro_q, language=lang, voice=voice_model)
+        twiml.append(gather)
+
+        twiml.say(sorry, language=lang, voice=voice_model)
+        twiml.hangup()
+
+    except Exception as e:
+        import traceback
+        print(f"Error in llm_voice_survey: {e}")
+        traceback.print_exc()
+        twiml.say("Sorry, there was a technical error.", language=lang)
+        twiml.hangup()
+
+    return Response(str(twiml), mimetype='text/xml')
+
+
+@app.route('/llm-handle-speech', methods=['POST'])
+def llm_handle_speech():
+    lang          = request.args.get('lang') or 'he-IL'
+    patient_name  = request.args.get('name') or 'noname'
+    batch         = request.args.get('batch') or 'basic'
+    q_num         = int(request.args.get('q_num', 1))
+    max_questions = int(request.args.get('max_q', 5))
+    call_sid      = request.form.get('CallSid', '')
+    speech_result = request.form.get('SpeechResult', '').strip()
+
+    print(f"===== llm_handle_speech {datetime.now()} q={q_num}/{max_questions} sid={call_sid} =====")
+    print(f"SpeechResult: {speech_result}")
+
+    voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
+    twiml       = VoiceResponse()
+
+    # Fill in the answer for the pending (last) question
+    history = _load_history(call_sid)
+    if history and history[-1].get('a') == '':
+        history[-1]['a'] = speech_result or '[no answer]'
+    history = _truncate_history(history)
+    _save_history(call_sid, history)
+
+    # Survey complete?
+    if q_num >= max_questions:
+        thanks = _read_from_json(lang, batch, THANKS, "messages")
+        twiml.say(thanks, language=lang, voice=voice_model)
+        twiml.hangup()
+        return Response(str(twiml), mimetype='text/xml')
+
+    try:
+        next_q_num = q_num + 1
+        next_q     = _ask_llm(lang, batch, history, next_q_num, max_questions)
+
+        # Store next question with empty answer placeholder
+        history.append({"q": next_q, "a": ""})
+        history = _truncate_history(history)
+        _save_history(call_sid, history)
+
+        gather = Gather(
+            input='speech',
+            speech_timeout='auto',
+            language=lang,
+            action=(
+                f'/llm-handle-speech?q_num={next_q_num}&lang={lang}'
+                f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}'
+            ),
+            method='POST',
+        )
+        gather.say(next_q, language=lang, voice=voice_model)
+        twiml.append(gather)
+
+        sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
+        twiml.say(sorry, language=lang, voice=voice_model)
+        twiml.hangup()
+
+    except Exception as e:
+        print(f"Error in llm_handle_speech: {e}")
+        twiml.say("Sorry, there was a technical error.", language=lang)
+        twiml.hangup()
+
+    return Response(str(twiml), mimetype='text/xml')
+
+
+@app.route('/llm-recording-callback', methods=['POST'])
+def llm_recording_callback():
+    """Twilio posts here when the full-call recording is ready."""
+    call_sid      = request.form.get('CallSid', '')
+    recording_sid = request.form.get('RecordingSid', '')
+    recording_url = request.form.get('RecordingUrl', '')
+
+    print(f"===== llm_recording_callback call_sid={call_sid} recording_sid={recording_sid} =====")
+
+    if call_sid and recording_sid and recording_url:
+        call_record = Call.query.filter_by(call_sid=call_sid, question_id=0).first()
+        if call_record:
+            call_record.record_sid    = recording_sid
+            call_record.recording_url = recording_url + '.wav'
+            db.session.commit()
+            print(f"Recording URL saved for call {call_sid}")
+        else:
+            print(f"No LLM Call record found for call_sid={call_sid}")
+
+    return '', 200
+
+
+@app.route('/patients/<int:id>/llm-call', methods=['POST'])
+@login_required
+def patient_llm_call(id):
+    patient = Patient.query.filter_by(id=id, deleted=False).first()
+    if not patient:
+        abort(404)
+    if not current_user.is_superuser and patient.therapist_id != current_user.id:
+        abort(403)
+
+    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+    auth_token  = os.environ.get('TWILIO_AUTH_TOKEN')
+    client      = Client(account_sid, auth_token)
+
+    try:
+        call = client.calls.create(
+            to=patient.phone,
+            from_=TWILIO_NUMBER,
+            url=(
+                f'{BASE_URL}/llm-voice?lang={patient.language}'
+                f'&name={quote(patient.nickname or patient.name)}'
+                f'&batch={patient.batch or "basic"}'
+                f'&to_phone={quote(patient.phone)}'
+                f'&from_phone={quote(TWILIO_NUMBER)}'
+            ),
+            record=True,
+            recording_channels='dual',
+            recording_status_callback=f'{BASE_URL}/llm-recording-callback',
+            recording_status_callback_method='POST',
+        )
+
+        call_record = Call(
+            callSid=call.sid,
+            recordSid=None,
+            questionId=0,
+            recordingUrl=None,
+            conversationText='[]',
+            patientPhone=patient.phone,
+            carrierPhone=TWILIO_NUMBER,
+            questionsFile=f"questions_{patient.batch or 'basic'}_{patient.language}.json",
+        )
+        db.session.add(call_record)
+        db.session.commit()
+
+        flash(f'LLM call initiated to {patient.name}. SID: {call.sid}', 'success')
+    except Exception as e:
+        flash(f'LLM call failed: {str(e)}', 'error')
+
+    return redirect(url_for('patient_list'))
