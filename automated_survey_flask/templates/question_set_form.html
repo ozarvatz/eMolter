@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if qs else 'New' }} Question Set - eMolter{% endblock %}
+
+{% block content %}
+<h1>{{ 'Edit' if qs else 'New' }} Question Set</h1>
+
+{% set content  = qs.content if qs else {} %}
+{% set msgs     = content.get('messages', [{},{},{},{}]) %}
+{% set cfg      = content.get('config', [{}]) %}
+{% set questions = content.get('questions', []) %}
+
+<form method="POST" id="qs-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="form-group">
+                <label>Batch *</label>
+                <input type="text" class="form-control" name="batch"
+                       value="{{ qs.batch if qs else '' }}" required placeholder="e.g. zeev4">
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="form-group">
+                <label>Language *</label>
+                <select class="form-control" name="lang">
+                    {% for code, label in [('he-IL','Hebrew'), ('en-US','English'), ('de-DE','German')] %}
+                    <option value="{{ code }}" {{ 'selected' if qs and qs.lang == code else '' }}>{{ label }} ({{ code }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="form-group">
+                <label>Title</label>
+                <input type="text" class="form-control" name="title"
+                       value="{{ content.get('title', '') }}" placeholder="Survey title">
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label>Voice Model (TTS)</label>
+        <input type="text" class="form-control" name="voice_algo"
+               value="{{ cfg[0].get('body', '') if cfg else '' }}"
+               placeholder="e.g. Google.he-IL-Standard-A">
+    </div>
+
+    <h4 style="margin-top:20px;">System Messages</h4>
+    <div class="row">
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Sorry / Failed (message 1)</label>
+                <input type="text" class="form-control" name="msg_sorry_failed"
+                       value="{{ msgs[0].get('body', '') if msgs|length > 0 else '' }}">
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>You Said (message 2) — use <code>{}</code> for the answer</label>
+                <input type="text" class="form-control" name="msg_you_said"
+                       value="{{ msgs[1].get('body', '') if msgs|length > 1 else '' }}">
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Thanks / Goodbye (message 3)</label>
+                <input type="text" class="form-control" name="msg_thanks"
+                       value="{{ msgs[2].get('body', '') if msgs|length > 2 else '' }}">
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label>Hello (message 4)</label>
+                <input type="text" class="form-control" name="msg_hello"
+                       value="{{ msgs[3].get('body', '') if msgs|length > 3 else '' }}">
+            </div>
+        </div>
+    </div>
+
+    <h4 style="margin-top:20px;">Questions
+        <button type="button" class="btn btn-sm btn-success" onclick="addQuestion()" style="margin-left:10px;">
+            + Add Question
+        </button>
+    </h4>
+    <div id="questions-container">
+        {% for q in questions %}
+        <div class="question-row input-group" style="margin-bottom:8px;">
+            <span class="input-group-addon question-num">{{ loop.index }}</span>
+            <input type="text" class="form-control" name="question_{{ loop.index0 }}"
+                   value="{{ q.get('body', '') }}" placeholder="Question text" required>
+            <span class="input-group-btn">
+                <button type="button" class="btn btn-danger" onclick="removeQuestion(this)">✕</button>
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div style="margin-top:20px;">
+        <button type="submit" class="btn btn-primary">{{ 'Update' if qs else 'Create' }}</button>
+        <a href="{{ url_for('question_set_list') }}" class="btn btn-default">Cancel</a>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var questionCount = {{ questions|length }};
+
+function addQuestion() {
+    var container = document.getElementById('questions-container');
+    var div = document.createElement('div');
+    div.className = 'question-row input-group';
+    div.style.marginBottom = '8px';
+    div.innerHTML =
+        '<span class="input-group-addon question-num">' + (questionCount + 1) + '</span>' +
+        '<input type="text" class="form-control" name="question_' + questionCount +
+        '" placeholder="Question text" required>' +
+        '<span class="input-group-btn">' +
+        '<button type="button" class="btn btn-danger" onclick="removeQuestion(this)">✕</button>' +
+        '</span>';
+    container.appendChild(div);
+    questionCount++;
+    renumber();
+}
+
+function removeQuestion(btn) {
+    var row = btn.closest('.question-row');
+    row.parentNode.removeChild(row);
+    renumber();
+}
+
+function renumber() {
+    var rows = document.querySelectorAll('#questions-container .question-row');
+    questionCount = rows.length;
+    rows.forEach(function(row, i) {
+        row.querySelector('.question-num').textContent = i + 1;
+        row.querySelector('input').name = 'question_' + i;
+    });
+}
+</script>
+{% endblock %}

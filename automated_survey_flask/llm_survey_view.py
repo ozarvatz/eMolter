@@ -45,20 +45,13 @@ def _get_groq_client():
 # JSON helpers (self-contained — survey_view.py not imported to avoid coupling)
 # ---------------------------------------------------------------------------
 def _read_from_json(lang, batch, n, entity):
-    json_path = f"questions_{batch}_{lang}.json"
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    items = data.get(entity, [])
-    if n < 1 or n > len(items):
-        raise IndexError(f"{entity}[{n}] out of range (len={len(items)})")
-    return items[n - 1]["body"]
+    from automated_survey_flask.question_service import read_question
+    return read_question(lang, batch, n, entity)
 
 
 def _get_base_questions(lang, batch):
-    json_path = f"questions_{batch}_{lang}.json"
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    return [q["body"] for q in data.get("questions", [])]
+    from automated_survey_flask.question_service import get_questions_list
+    return get_questions_list(lang, batch)
 
 
 # ---------------------------------------------------------------------------

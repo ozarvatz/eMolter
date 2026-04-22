@@ -170,37 +170,8 @@ def voice_survey():
     return Response(str(response), mimetype='text/xml')
 
 def read_question_from_json(lang, batch, n, entity):
-    app_root = Path(__file__).parent.resolve()
-    json_path = f"questions_{batch}_{lang}.json"
-    
-    try:
-        with open(json_path, 'r', encoding='utf-8') as file:
-            data = json.load(file)
-        
-            
-        questions = data.get(entity, [])
-        print("questions:")
-        print(questions)
-        # if not questions:
-        #     print(f"empty {entity} from json , print DATA:")
-        #     print(data)
-        #     print(f"data.get({entity}, [])")
-        #     print(data.get('messages', []))
-
-        # Check if the index exists
-        # We use n-1 to convert 1-based human counting to 0-based indexing
-        if n < 1 or n > len(questions):
-            raise IndexError(f"Question number {n} is out of range. Total questions: {len(questions)}")
-        
-        # Return only the 'body' string
-        return questions[n - 1]["body"]
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"The file at {json_path} was not found.")
-    except json.JSONDecodeError:
-        raise ValueError("The file is not a valid JSON format.")
-    except KeyError:
-        raise KeyError("The JSON structure is missing the 'questions' or 'body' keys.")
+    from automated_survey_flask.question_service import read_question
+    return read_question(lang, batch, n, entity)
 
 @app.route('/message', methods=['GET', 'POST'])
 def sms_survey():

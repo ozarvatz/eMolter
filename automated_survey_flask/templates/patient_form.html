@@ -28,8 +28,17 @@
 
     <div class="form-group">
         <label for="batch">Batch</label>
+        {% if batches %}
+        <select class="form-control" id="batch" name="batch">
+            {% for b in batches %}
+            <option value="{{ b }}" {{ 'selected' if patient and patient.batch == b }}>{{ b }}</option>
+            {% endfor %}
+        </select>
+        {% else %}
         <input type="text" class="form-control" id="batch" name="batch"
-               value="{{ patient.batch if patient else 'basic' }}">
+               value="{{ patient.batch if patient else '' }}"
+               placeholder="No question sets yet — create one first">
+        {% endif %}
     </div>
 
     <div class="form-group">

@@ -174,6 +174,39 @@ class User(UserMixin, db.Model):
         return cls.query.filter_by(deleted=False)
 
 
+class QuestionSet(db.Model):
+    """Stores survey question sets, keyed by (batch, lang). Replaces JSON files."""
+    __tablename__ = 'question_sets'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    batch         = db.Column(db.String(50), nullable=False)
+    lang          = db.Column(db.String(10), nullable=False)
+    content       = db.Column(db.JSON, nullable=False)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at    = db.Column(db.DateTime, default=db.func.now())
+    updated_at    = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    __table_args__ = (
+        db.UniqueConstraint('batch', 'lang', name='uq_question_set_batch_lang'),
+    )
+
+    def __init__(self, batch, lang, content, created_by_id=None):
+        self.batch         = batch
+        self.lang          = lang
+        self.content       = content
+        self.created_by_id = created_by_id
+
+    def get_item(self, entity, n):
+        """Return body of nth item (1-based) from entity ('questions','messages','config')."""
+        items = self.content.get(entity, [])
+        if n < 1 or n > len(items):
+            raise IndexError(f"{entity}[{n}] out of range (len={len(items)})")
+        return items[n - 1]['body']
+
+    def questions_list(self):
+        return [q['body'] for q in self.content.get('questions', [])]
+
+
 class ProsodyParameter(db.Model):
     __tablename__ = 'prosody_parameters'
 

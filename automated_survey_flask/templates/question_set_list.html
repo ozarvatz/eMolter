@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Question Sets - eMolter{% endblock %}
+
+{% block content %}
+<h1>Question Sets</h1>
+<a href="{{ url_for('question_set_new') }}" class="btn btn-primary" style="margin-bottom:15px;">Add New Question Set</a>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Batch</th>
+            <th>Language</th>
+            <th>Title</th>
+            <th>Questions</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for qs in question_sets %}
+        <tr>
+            <td>{{ qs.batch }}</td>
+            <td>{{ qs.lang }}</td>
+            <td>{{ qs.content.get('title', '-') }}</td>
+            <td>{{ qs.content.get('questions', [])|length }}</td>
+            <td>
+                <a href="{{ url_for('question_set_edit', id=qs.id) }}" class="btn btn-sm btn-default">Edit</a>
+                <form method="POST" action="{{ url_for('question_set_delete', id=qs.id) }}"
+                      style="display:inline;" onsubmit="return confirm('Delete this question set?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-muted">No question sets in database yet.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

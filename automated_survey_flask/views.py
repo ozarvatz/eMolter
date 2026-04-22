@@ -6,7 +6,8 @@ from . import auth_view  # noqa F401
 from . import therapist_view  # noqa F401
 from . import admin_view  # noqa F401
 from . import analytics_view  # noqa F401
-from . import llm_survey_view  # noqa F401
+from . import llm_survey_view      # noqa F401
+from . import question_set_view    # noqa F401
 from flask import render_template
 from .models import Question
 

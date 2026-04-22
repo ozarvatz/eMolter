@@ -4,10 +4,18 @@ import pandas as pd
 from flask import render_template, request, redirect, url_for, flash, abort, make_response
 from flask_login import login_required, current_user
 from automated_survey_flask import app, db
-from automated_survey_flask.models import Patient, Call, ProsodyParameter
+from automated_survey_flask.models import Patient, Call, ProsodyParameter, QuestionSet
 from twilio.rest import Client
 import os
 from urllib.parse import quote
+
+
+def _available_batches():
+    """Return sorted list of distinct batch names the current user owns (or all for superuser)."""
+    q = db.session.query(QuestionSet.batch).distinct()
+    if not current_user.is_superuser:
+        q = q.filter(QuestionSet.created_by_id == current_user.id)
+    return [r[0] for r in q.order_by(QuestionSet.batch).all()]
 
 
 def get_patient_or_403(patient_id):
@@ -86,7 +94,7 @@ def patient_new():
             flash(f'Patient {name} created successfully', 'success')
             return redirect(url_for('patient_list'))
 
-    return render_template('patient_form.html', patient=None)
+    return render_template('patient_form.html', patient=None, batches=_available_batches())
 
 
 @app.route('/patients/<int:id>/edit', methods=['GET', 'POST'])
@@ -104,7 +112,7 @@ def patient_edit(id):
         flash(f'Patient {patient.name} updated successfully', 'success')
         return redirect(url_for('patient_list'))
 
-    return render_template('patient_form.html', patient=patient)
+    return render_template('patient_form.html', patient=patient, batches=_available_batches())
 
 
 @app.route('/patients/<int:id>/delete', methods=['POST'])

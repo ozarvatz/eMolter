@@ -6,7 +6,7 @@ from automated_survey_flask import app, db, parsers, prepare_app
 from automated_survey_flask.models import Survey, Question, Patient, User  # <--- Add Patient and User here
 
 prepare_app()
-migrate = Migrate(app, db)
+migrate = Migrate(app, db, render_as_batch=True)
 
 manager = Manager(app)
 manager.add_command('db', MigrateCommand)
@@ -158,6 +158,43 @@ def seed_prosody_params():
 
     db.session.commit()
     print(f"\n🎉 Prosody parameters seeded successfully!")
+
+
+@manager.command
+def seed_question_sets():
+    """Import all questions_*.json files into the question_sets DB table."""
+    import glob
+    from automated_survey_flask.models import QuestionSet
+
+    files = glob.glob("questions_*.json")
+    if not files:
+        print("No questions_*.json files found.")
+        return
+
+    imported = skipped = 0
+    for filepath in sorted(files):
+        filename = filepath.replace("questions_", "").replace(".json", "")
+        parts = filename.split("_", 1)
+        if len(parts) != 2:
+            print(f"Skipping {filepath} — unexpected filename format")
+            continue
+        batch, lang = parts[0], parts[1]
+
+        if QuestionSet.query.filter_by(batch=batch, lang=lang).first():
+            print(f"⏭️  Skipped (exists): {batch} / {lang}")
+            skipped += 1
+            continue
+
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = json.load(f)
+
+        qs = QuestionSet(batch=batch, lang=lang, content=content)
+        db.session.add(qs)
+        print(f"✅ Imported: {batch} / {lang}  ({len(content.get('questions', []))} questions)")
+        imported += 1
+
+    db.session.commit()
+    print(f"\nDone — {imported} imported, {skipped} skipped.")
 
 
 if __name__ == "__main__":
