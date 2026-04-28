@@ -5,6 +5,9 @@ import parselmouth
 import tempfile
 import os
 import re
+import fcntl
+
+LOCK_FILE = '/tmp/prosody.lock'
 from parselmouth.praat import call
 from automated_survey_flask import app
 from automated_survey_flask.models import db, Call
@@ -218,6 +221,13 @@ if __name__ == "__main__":
         except Exception as e:
             print(json.dumps({"error": str(e)}, indent=4))
     
+    lock_fp = open(LOCK_FILE, 'w')
+    try:
+        fcntl.flock(lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        print("prosody.py is already running. Exiting.")
+        sys.exit(0)
+
     with app.app_context():
         db.init_app(app)
         while True:

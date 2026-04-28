@@ -19,9 +19,9 @@ def _available_batches():
 
 
 def get_patient_or_403(patient_id):
-    """Get patient and verify ownership"""
+    """Get patient and verify ownership (superusers bypass ownership check)"""
     patient = Patient.query.filter_by(id=patient_id, deleted=False).first()
-    if not patient or patient.therapist_id != current_user.id:
+    if not patient or (not current_user.is_superuser and patient.therapist_id != current_user.id):
         abort(403)
     return patient
 
@@ -32,7 +32,10 @@ def dashboard():
     page = request.args.get('page', 1, type=int)
     per_page = 10
 
-    patients = Patient.active().filter_by(therapist_id=current_user.id).all()
+    if current_user.is_superuser:
+        patients = Patient.active().all()
+    else:
+        patients = Patient.active().filter_by(therapist_id=current_user.id).all()
 
     # Create phone to patient mapping for displaying nicknames
     phone_to_patient = {p.phone: p for p in patients}
@@ -64,7 +67,10 @@ def dashboard():
 @app.route('/patients')
 @login_required
 def patient_list():
-    patients = Patient.active().filter_by(therapist_id=current_user.id).all()
+    if current_user.is_superuser:
+        patients = Patient.active().all()
+    else:
+        patients = Patient.active().filter_by(therapist_id=current_user.id).all()
     return render_template('patient_list.html', patients=patients)
 
 
