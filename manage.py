@@ -197,5 +197,22 @@ def seed_question_sets():
     print(f"\nDone — {imported} imported, {skipped} skipped.")
 
 
+@manager.command
+def delete_today_calls():
+    """Delete all Call rows created today."""
+    from automated_survey_flask.models import Call
+    from datetime import date
+    today = date.today()
+    rows = Call.query.filter(db.func.date(Call.created_at) == today).all()
+    count = len(rows)
+    if count == 0:
+        print("No calls found for today.")
+        return
+    for row in rows:
+        db.session.delete(row)
+    db.session.commit()
+    print(f"Deleted {count} call row(s) created today ({today}).")
+
+
 if __name__ == "__main__":
     manager.run()

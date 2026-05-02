@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from urllib.parse import quote
 from datetime import datetime
 
@@ -14,6 +15,11 @@ from .models import db, Call, Patient
 # ---------------------------------------------------------------------------
 # Constants (mirror survey_view.py conventions)
 # ---------------------------------------------------------------------------
+def _twilio_lang(lang):
+    """Map language codes to Twilio-compatible codes. Google TTS uses iw-IL for Hebrew."""
+    return 'iw-IL' if lang == 'he-IL' else lang
+
+
 SORRY_FAILED  = 1
 THANKS        = 3
 HELLO         = 4
@@ -42,6 +48,33 @@ def _get_groq_client():
 
 
 # ---------------------------------------------------------------------------
+# Audio transcription via Groq Whisper
+# ---------------------------------------------------------------------------
+def _transcribe_audio(recording_url, lang):
+    """Download a Twilio recording and transcribe it with Groq Whisper."""
+    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+    auth_token  = os.environ.get('TWILIO_AUTH_TOKEN')
+    # Convert BCP-47 ('he-IL') to Whisper ISO-639-1 ('he')
+    whisper_lang = lang.split('-')[0] if lang and '-' in lang else lang
+
+    t0 = time.time()
+    resp = http_requests.get(recording_url, auth=(account_sid, auth_token), timeout=15)
+    resp.raise_for_status()
+    print(f"[TIMING] Recording download: {(time.time()-t0)*1000:.1f}ms ({len(resp.content)} bytes)")
+
+    t0 = time.time()
+    transcription = _get_groq_client().audio.transcriptions.create(
+        file=('recording.wav', resp.content),
+        model='whisper-large-v3-turbo',
+        language=whisper_lang,
+        response_format='text',
+    )
+    result = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+    print(f"[TIMING] Groq Whisper: {(time.time()-t0)*1000:.1f}ms → '{result}'")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # JSON helpers (self-contained — survey_view.py not imported to avoid coupling)
 # ---------------------------------------------------------------------------
 def _read_from_json(lang, batch, n, entity):
@@ -61,7 +94,9 @@ def _get_base_questions(lang, batch):
 # question_id=0 is the sentinel for LLM-survey records.
 # ---------------------------------------------------------------------------
 def _load_history(call_sid):
+    t0 = time.time()
     call = Call.query.filter_by(call_sid=call_sid, question_id=0).first()
+    print(f"[TIMING] DB read history: {(time.time()-t0)*1000:.1f}ms")
     if not call or not call.conversation_text:
         return []
     try:
@@ -71,10 +106,12 @@ def _load_history(call_sid):
 
 
 def _save_history(call_sid, history):
+    t0 = time.time()
     call = Call.query.filter_by(call_sid=call_sid, question_id=0).first()
     if call:
         call.conversation_text = json.dumps(history, ensure_ascii=False)
         db.session.commit()
+    print(f"[TIMING] DB write history: {(time.time()-t0)*1000:.1f}ms")
 
 
 def _truncate_history(history):
@@ -101,8 +138,12 @@ def _ask_llm(lang, batch, history, q_num, max_questions):
             history_lines += f"Q{i+1}: {entry['q']}\nA{i+1}: {entry['a']}\n"
 
     system_prompt = (
-        f"You are a warm, empathetic mental health interviewer conducting a voice survey by phone.\n"
-        f"You MUST reply ONLY in the language matching this locale: {lang}.\n\n"
+        f"You are a warm, empathetic mental health interviewer conducting a voice survey by phone.\n\n"
+        f"LANGUAGE RULE (absolute — no exceptions):\n"
+        f"You MUST write every single word of your output in the language of locale {lang}. "
+        f"Never switch to any other language, even if the patient's transcribed answer appears "
+        f"to be in a different language. Phone speech-to-text is imperfect; assume the patient "
+        f"is always speaking {lang} and infer their intent from context.\n\n"
         f"Topics to explore during the survey (a flexible guide — NOT a fixed script):\n"
         f"{numbered}\n\n"
         f"Rules — follow these strictly:\n"
@@ -128,6 +169,7 @@ def _ask_llm(lang, batch, history, q_num, max_questions):
     )
 
     client = _get_groq_client()
+    t0 = time.time()
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
@@ -137,6 +179,7 @@ def _ask_llm(lang, batch, history, q_num, max_questions):
         max_tokens=80,
         temperature=0.7,
     )
+    print(f"[TIMING] Groq API call: {(time.time()-t0)*1000:.1f}ms")
     return resp.choices[0].message.content.strip()
 
 
@@ -192,28 +235,29 @@ def llm_voice_survey():
             )
             db.session.commit()
 
-        # TwiML: Gather Q1 directly (Q1 itself is the greeting + first question)
+        # 1-second pause absorbs the patient's pickup "hello" before Gather starts.
+        twiml.pause(length=1)
         gather = Gather(
             input='speech',
             speech_timeout='auto',
-            language=lang,
+            language=_twilio_lang(lang),
+            speech_model='phone_call',
             action=(
                 f'/llm-handle-speech?q_num=1&lang={lang}'
                 f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}'
             ),
             method='POST',
         )
-        gather.say(intro_q, language=lang, voice=voice_model)
+        gather.say(intro_q, language=_twilio_lang(lang), voice=voice_model)
         twiml.append(gather)
-
-        twiml.say(sorry, language=lang, voice=voice_model)
+        twiml.say(sorry, language=_twilio_lang(lang), voice=voice_model)
         twiml.hangup()
 
     except Exception as e:
         import traceback
         print(f"Error in llm_voice_survey: {e}")
         traceback.print_exc()
-        twiml.say("Sorry, there was a technical error.", language=lang)
+        twiml.say("Sorry, there was a technical error.", language=_twilio_lang(lang))
         twiml.hangup()
 
     return Response(str(twiml), mimetype='text/xml')
@@ -229,6 +273,7 @@ def llm_handle_speech():
     call_sid      = request.form.get('CallSid', '')
     speech_result = request.form.get('SpeechResult', '').strip()
 
+    t_request = time.time()
     print(f"===== llm_handle_speech {datetime.now()} q={q_num}/{max_questions} sid={call_sid} =====")
     print(f"SpeechResult: {speech_result}")
 
@@ -245,15 +290,15 @@ def llm_handle_speech():
     # Survey complete?
     if q_num >= max_questions:
         thanks = _read_from_json(lang, batch, THANKS, "messages")
-        twiml.say(thanks, language=lang, voice=voice_model)
+        twiml.say(thanks, language=_twilio_lang(lang), voice=voice_model)
         twiml.hangup()
+        print(f"[TIMING] llm_handle_speech total (survey done): {(time.time()-t_request)*1000:.1f}ms")
         return Response(str(twiml), mimetype='text/xml')
 
     try:
         next_q_num = q_num + 1
         next_q     = _ask_llm(lang, batch, history, next_q_num, max_questions)
 
-        # Store next question with empty answer placeholder
         history.append({"q": next_q, "a": ""})
         history = _truncate_history(history)
         _save_history(call_sid, history)
@@ -261,25 +306,27 @@ def llm_handle_speech():
         gather = Gather(
             input='speech',
             speech_timeout='auto',
-            language=lang,
+            language=_twilio_lang(lang),
+            speech_model='phone_call',
             action=(
                 f'/llm-handle-speech?q_num={next_q_num}&lang={lang}'
                 f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}'
             ),
             method='POST',
         )
-        gather.say(next_q, language=lang, voice=voice_model)
+        gather.say(next_q, language=_twilio_lang(lang), voice=voice_model)
         twiml.append(gather)
 
         sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
-        twiml.say(sorry, language=lang, voice=voice_model)
+        twiml.say(sorry, language=_twilio_lang(lang), voice=voice_model)
         twiml.hangup()
 
     except Exception as e:
         print(f"Error in llm_handle_speech: {e}")
-        twiml.say("Sorry, there was a technical error.", language=lang)
+        twiml.say("Sorry, there was a technical error.", language=_twilio_lang(lang))
         twiml.hangup()
 
+    print(f"[TIMING] llm_handle_speech total: {(time.time()-t_request)*1000:.1f}ms")
     return Response(str(twiml), mimetype='text/xml')
 
 

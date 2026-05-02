@@ -50,10 +50,11 @@ def initiate_survey_call():
         call = client.calls.create(
             to=YOUR_NUMBER,
             from_=TWILIO_NUMBER,
-            # url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&to_phone={YOUR_NUMBER}&from_phone={TWILIO_NUMBER}', # Assumes your TwiML route is /voice
-            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&questionId=1&to_phone={urllib.parse.quote(YOUR_NUMBER)}&from_phone={urllib.parse.quote(TWILIO_NUMBER)}', # Assumes your TwiML route is /voice
+            url=f'{NGROK_URL}/voice?lang={args.lang}&name={patientName}&batch={batch}&questionId=1&to_phone={urllib.parse.quote(YOUR_NUMBER)}&from_phone={urllib.parse.quote(TWILIO_NUMBER)}',
             record=True,
-            recording_channels='dual'
+            recording_channels='dual',
+            recording_status_callback=f'{NGROK_URL}/non-llm-recording-callback',
+            recording_status_callback_method='POST',
         )
         print(f"🎉 Call initiated successfully to {YOUR_NUMBER}.")
         print(f"Twilio SID: {call.sid}")

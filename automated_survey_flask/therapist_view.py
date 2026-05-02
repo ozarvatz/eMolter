@@ -149,7 +149,9 @@ def patient_call(id):
             from_=TWILIO_NUMBER,
             url=f'{NGROK_URL}/voice?lang={patient.language}&name={quote(patient.nickname or patient.name)}&batch={patient.batch or "basic"}&questionId=1&to_phone={quote(patient.phone)}&from_phone={quote(TWILIO_NUMBER)}',
             record=True,
-            recording_channels='dual'
+            recording_channels='dual',
+            recording_status_callback=f'{NGROK_URL}/non-llm-recording-callback',
+            recording_status_callback_method='POST',
         )
 
         flash(f'Call initiated to {patient.name}. Call SID: {call.sid}', 'success')

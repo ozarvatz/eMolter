@@ -14,6 +14,7 @@ from datetime import datetime
 import re
 import time
 import uuid
+import threading
 
 # from . import csrf
 # from flask_wtf.csrf import CSRFProtect
@@ -35,6 +36,11 @@ auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
 DB_FILE = 'links_db.json'
 EXPORT_DIR = os.path.join(app.static_folder, 'exports')
 TTL_SECONDS = 6000 # 10 minutes 
+
+def _twilio_lang(lang):
+    """Map language codes to Twilio-compatible codes. Google TTS uses iw-IL for Hebrew."""
+    return 'iw-IL' if lang == 'he-IL' else lang
+
 
 phones_str = os.environ.get('ALLOWED_PHONES', '')
 
@@ -73,100 +79,40 @@ def voice_survey():
     """TwiML endpoint that asks the first question using Speech Recognition."""
     response = VoiceResponse()
     
-    if 1 == current_questionId:
-        # 1. Start a "Listener" that understands Hebrew/German
-        # This runs in the background while the recording happens
-        start = Start()
-        start.transcription(
-            language_code=f'{lang}', 
-            # language=f'{lang}',
-            status_callback_url=f'https://www.emolter.org:5000/handle-realtime-text?batch={batch}&lang={lang}&callSid={call_sid}&from_phone={from_phone}&to_phone={to_phone}'
-        )
-        response.append(start)
-    
-    # gather = Gather(
-    #     input='speech',
-    #     speech_timeout='auto', # 'auto' is faster than a fixed '2'
-    #     language=f'{lang}',
-    #     action=f'/handle-speech?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
-    #     method='POST',
-    #     # This tells Twilio to record the speech but NOT wait for transcription
-    #     #record='record-from-answer'
-    #     # This creates a separate recording for JUST this gather
-    #     recording_track='outbound_track',
-    #     enhanced=True,
-    # )
-    # response.append(gather)
     print(f"*******before {datetime.now()} ******")
     voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
     print(f"voice_model = {voice_model}")
     print(f"call sid: {call_sid}")
 
-    # Ask the first question
-    # gather.say("Welcome to the automated survey. How is your day going so far?")
+    current_question_txt = ""
     try:
         current_question_txt = read_question_from_json(lang, batch, current_questionId, "questions")
         print(f"first questionId: {current_questionId}")
         if 1 == current_questionId:
             current_question_txt = current_question_txt.format(patientName)
-            hello_text_msg = read_question_from_json(lang, batch, HELLO, "messages")
-            #gather.say(
-            response.say(
-                hello_text_msg,
-                language=f'{lang}',
-                voice=voice_model #'Google.he-IL-Standard-A'
-            )
         print(f"    question: {current_question_txt}")
     except Exception as e:
         print(f"error in read file {e}")
-    
-    
-    
-    #gather.say(
-    response.say(
-        current_question_txt, 
-        language=f'{lang}', 
-        voice=voice_model #'Google.he-IL-Standard-A'
-        # hints='שלום, להתראות, סיום, הכל טוב, גרוע, בסדר, מצוין', # Add Hebrew hints here
-        # speech_model='experimental_conversations' # Try this model
-    )
-    
-    
-    base_url = request.url_root.rstrip('/')
-    base_url = base_url.replace("http://", "https://")
-    # print(f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}')
-    response.record(
+
+    gather = Gather(
+        input='speech',
+        speech_timeout='auto',
+        language=_twilio_lang(lang),
+        speech_model='phone_call',
         action=f'/handle-speech?lang={lang}&name={quote(patientName)}&batch={batch}&questionId={current_questionId}',
         method='POST',
-        # language=f'{lang}',
-        play_beep=True,
-        timeout=2,           # Stops recording after 2 seconds of silence
-        # max_length=15,       # Limits the answer length
-        transcribe=False,     # KEY: Disabling this removes the 15-second delay
-        # language='he-IL',
-        # Twilio will send the text here whenever it is ready
-        #transcription_callback=f'{base_url}/handle-transcription?questionId={current_questionId}&callSid={call_sid}'
-        #transcription_czallback=f'https://expectative-refugio-bizarrely.ngrok-free.dev/handle-transcription?questionId={current_questionId}',
-        # transcribe_callback=f'http://188.166.110.236:5000/handle-transcription?questionId={current_questionId}',
     )
-    # response.record(
-    #     action=f'/handle-speech?lang={lang}&name={patientName}&batch={batch}&questionId={current_questionId}',
-    #     method='POST',
-    #     play_beep=True,
-    #     timeout=3,      # Seconds of silence before stopping
-    #     transcribe=True # This tells Twilio to turn the audio into text
-    # )
+    print(f"[TWIML] voice_survey: lang={lang}→{_twilio_lang(lang)}, model=phone_call, q={current_questionId}")
+    if 1 == current_questionId:
+        hello_text_msg = read_question_from_json(lang, batch, HELLO, "messages")
+        gather.say(hello_text_msg, language=_twilio_lang(lang), voice=voice_model)
+    gather.say(current_question_txt, language=_twilio_lang(lang), voice=voice_model)
+    response.append(gather)
 
     sorry_failed = read_question_from_json(lang, batch, SORRY_FAILED, "messages")
-    # response.append(gather)
-    response.say(
-        sorry_failed,
-        language=f'{lang}',
-        voice=voice_model #'Google.he-IL-Standard-A'  
-    )
+    response.say(sorry_failed, language=_twilio_lang(lang), voice=voice_model)
     response.hangup()
-    
-    # return str(response)
+
     return Response(str(response), mimetype='text/xml')
 
 def read_question_from_json(lang, batch, n, entity):
@@ -196,84 +142,91 @@ def handle_speech():
     batch = request.args.get('batch') or session.get('batch') or 'basic'
     patientName = request.args.get('name') or session.get('name') or 'noname'
     current_questionId = int(request.args.get('questionId')) or int(session.get('questionId')) or 2
-    recording_url = request.form.get('RecordingUrl') + ".wav"
-    recording_sid = request.form.get('RecordingSid')
-    account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+    speech_result = request.form.get('SpeechResult', '').strip()
     call_sid = request.form.get('CallSid')
-    patient_phone = fixPhoneNumber(request.form.get('To',''))
-    carrier_phone = fixPhoneNumber(request.form.get('From',''))
-    
-    print(f"############# handle_speech {datetime.now()}##############")
-    print(f"session lunguage = {lang}")
-    print(f"RecordingUrl: {recording_url}.wav")
-    print(f"RecordingSid: {recording_sid}")
-    print(f"Twilio Account SID: {account_sid}")
-    print(f"session questionId = {current_questionId}")
-    print(f"call sid: {call_sid}")
-    print(f"patient phone: {patient_phone}")
-    print(f"carrier phone: {carrier_phone}")
+    patient_phone = fixPhoneNumber(request.form.get('To', ''))
+    carrier_phone = fixPhoneNumber(request.form.get('From', ''))
 
-# insert DB record
-    call_snippet = Call.query.filter_by(call_sid=call_sid, question_id=current_questionId).first()
+    t_request = time.time()
+    print(f"############# handle_speech {datetime.now()}##############")
+    print(f"lang={lang}, questionId={current_questionId}, call_sid={call_sid}")
+    print(f"SpeechResult: {speech_result}")
+    print(f"[TIMING] request parsing: {(time.time()-t_request)*1000:.1f}ms")
+
+    t0 = time.time()
+    call_snippet = Call.query.filter_by(call_sid=call_sid, question_id=1).first()
+    print(f"[TIMING] DB read call: {(time.time()-t0)*1000:.1f}ms")
+
+    t0 = time.time()
     questions_file = f"questions_{batch}_{lang}.json"
+    try:
+        question_text = read_question_from_json(lang, batch, current_questionId, "questions")
+        if current_questionId == 1:
+            question_text = question_text.format(patientName)
+    except Exception:
+        question_text = f"Question {current_questionId}"
+    print(f"[TIMING] read question from json: {(time.time()-t0)*1000:.1f}ms")
+
+    qa_entry = f"Q{current_questionId}: {question_text}\nA{current_questionId}: {speech_result}"
+    t0 = time.time()
     if call_snippet:
-        print(f"Updating existing stub for Question {current_questionId}")
-        call_snippet.record_sid = recording_sid
-        call_snippet.recording_url = recording_url
+        existing = call_snippet.conversation_text or ""
+        call_snippet.conversation_text = (existing + f"\n{qa_entry}").strip()
         call_snippet.questions_file = questions_file
-        call_snippet.patient_phone = patient_phone
-        call_snippet.carrier_phone = carrier_phone
+        if patient_phone:
+            call_snippet.patient_phone = patient_phone
+        if carrier_phone:
+            call_snippet.carrier_phone = carrier_phone
     else:
-        # 3. Create a NEW row for this specific recording snippet
         call_snippet = Call(
             callSid=call_sid,
-            recordSid=recording_sid,
-            questionId=current_questionId,
-            recordingUrl=recording_url,
-            conversationText="", 
+            recordSid=None,
+            questionId=1,
+            recordingUrl=None,
+            conversationText=qa_entry,
             patientPhone=patient_phone,
             carrierPhone=carrier_phone,
             questionsFile=questions_file,
         )
         db.session.add(call_snippet)
-    db.session.commit()
-    
-    response = VoiceResponse()
-    
-    voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
-    # you_said = read_question_from_json(lang, batch, YOU_SAID, "messages")
-    # response.say(
-    #     you_said.format(speech_result),
-    #     language=f'{lang}',
-    #     voice=voice_model #'Google.he-IL-Standard-A'
-    # )
+    print(f"[TIMING] DB object update: {(time.time()-t0)*1000:.1f}ms")
 
+    t0 = time.time()
+    db.session.commit()
+    print(f"[TIMING] DB commit: {(time.time()-t0)*1000:.1f}ms")
+
+    t0 = time.time()
+    response = VoiceResponse()
+    voice_model = read_question_from_json(lang, batch, VOICE_ALGO, "config")
+    print(f"[TIMING] read voice model from json: {(time.time()-t0)*1000:.1f}ms")
+
+    t0 = time.time()
     next_questionId = current_questionId + 1
     try:
         read_question_from_json(lang, batch, next_questionId, "questions")
-        # next_url = url_for('voice', questionId=next_questionId, lang=lang )
+        print(f"[TIMING] read next question from json: {(time.time()-t0)*1000:.1f}ms")
         next_url = f"/voice?lang={lang}&questionId={next_questionId}&name={quote(patientName)}&batch={batch}"
         print(f"new Url: {next_url}")
         response.redirect(next_url)
     except Exception as e:
+        print(f"[TIMING] read next question (end of survey): {(time.time()-t0)*1000:.1f}ms")
         print(e)
         thanks = read_question_from_json(lang, batch, THANKS, "messages")
         response.say(
             thanks,
-            language=f'{lang}', 
-            voice=voice_model #'Google.he-IL-Standard-A'
+            language=_twilio_lang(lang),
+            voice=voice_model
         )
         response.hangup()
-        
-    # if 'סיום' in speech_result or 'סוף' in speech_result or 'end' in speech_result:
-    #     response.say(
-    #         "הבנתי שברצונך לסיים. שלום ויום טוב",
-    #         language=f'{lang}',
-    #         voice='Google.he-IL-Standard-A'
-    #     )
-    #     response.hangup() 
-    #     return str(response)
+        full_conversation = call_snippet.conversation_text if call_snippet else speech_result
+        if full_conversation:
+            threading.Thread(
+                target=send_survey_summary,
+                args=(carrier_phone, patient_phone, full_conversation),
+                daemon=True,
+            ).start()
 
+    print(f"[TIMING] handle_speech TOTAL: {(time.time()-t_request)*1000:.1f}ms")
     return Response(str(response), mimetype='text/xml')
 
 
@@ -289,10 +242,11 @@ def handle_realtime_text():
     lang = request.values.get('lang')
     call_sid = request.values.get('CallSid')
 
+    t_request = time.time()
     print(f"=============handle-realtime-text {datetime.now()} ============")
     print(f"from: {twillio_phone}, to: {patient_phone}")
     print(f'call sid: {call_sid}, question Id: {question_id}')
-    
+
     # Get the raw string data
     raw_data = request.form.get('TranscriptionData') # Verify the field name from Twilio
     print(f"THE DATA :::::::::::::: {raw_data}")
@@ -304,21 +258,20 @@ def handle_realtime_text():
             message_sid = send_survey_summary(twillio_phone, patient_phone, speech_text)
             patient_phone = fixPhoneNumber(patient_phone)
             twillio_phone = fixPhoneNumber(twillio_phone)
-            print(f"============twilio: {twillio_phone}, patient: {patient_phone}, YOU SAY - TEXT {speech_text}")  
-            # call_snippet = Call.query.filter_by(call_sid=call_sid, question_id=question_id).first()
+            print(f"============twilio: {twillio_phone}, patient: {patient_phone}, YOU SAY - TEXT {speech_text}")
+            t0 = time.time()
             call_snippet = Call.query.filter_by(call_sid=call_sid)\
                 .order_by(Call.question_id.desc())\
                 .first()
-            
+            print(f"[TIMING] DB read call (realtime): {(time.time()-t0)*1000:.1f}ms")
+
             if call_snippet:
-                # hear i want to upda  te conversation_text in db call_snippet
                 call_snippet.conversation_text = (call_snippet.conversation_text or "") + f" {speech_text}"
                 if patient_phone and len(patient_phone) > 1:
                     call_snippet.patient_phone = patient_phone
                 if twillio_phone and len(twillio_phone) > 1:
                     call_snippet.carrier_phone = twillio_phone
                 question_id = call_snippet.question_id
-                
                 print(f"update call row, call sid: {call_sid}, question Id: {question_id}")
             else:
                 call_record = Call(
@@ -333,16 +286,15 @@ def handle_realtime_text():
                 )
                 db.session.add(call_record)
 
+            t0 = time.time()
             db.session.commit()
+            print(f"[TIMING] DB write call (realtime): {(time.time()-t0)*1000:.1f}ms")
 
     except (json.JSONDecodeError, AttributeError, TypeError):
         # Fallback if it's already a dict or if it's empty
-        speech_text = raw_data 
+        speech_text = raw_data
 
-    # Rest of your logic...
-    # add the text to the specific line in the call data file.
-
-
+    print(f"[TIMING] handle_realtime_text total: {(time.time()-t_request)*1000:.1f}ms")
     return '', 200
 
 def send_survey_summary(from_number, to_number, questions_or_answers):
@@ -367,6 +319,23 @@ def send_survey_summary(from_number, to_number, questions_or_answers):
 
 
     return None
+
+@app.route('/non-llm-recording-callback', methods=['POST'])
+def non_llm_recording_callback():
+    """Twilio posts here when the full-call recording is ready (non-LLM path)."""
+    call_sid = request.form.get('CallSid', '')
+    recording_sid = request.form.get('RecordingSid', '')
+    recording_url = request.form.get('RecordingUrl', '')
+    print(f"===== non_llm_recording_callback call_sid={call_sid} =====")
+    if call_sid and recording_sid and recording_url:
+        call_record = Call.query.filter_by(call_sid=call_sid, question_id=1).first()
+        if call_record and not call_record.recording_url:
+            call_record.record_sid = recording_sid
+            call_record.recording_url = recording_url + '.wav'
+            db.session.commit()
+            print(f"Recording URL saved for non-LLM call {call_sid}")
+    return '', 200
+
 
 @app.route('/send-report/<sender>/<to>', methods=['GET', 'POST'])
 def send_whatsapp_report(sender, to):
