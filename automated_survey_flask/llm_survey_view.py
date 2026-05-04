@@ -1,6 +1,8 @@
 import os
 import json
 import time
+import threading
+import random
 from urllib.parse import quote
 from datetime import datetime
 
@@ -11,6 +13,19 @@ from twilio.twiml.voice_response import VoiceResponse, Gather
 
 from . import app
 from .models import db, Call, Patient
+
+# In-memory store for pre-computed LLM questions: call_sid -> {"q": str|None, "event": Event}
+_pending_questions = {}
+
+FILLERS = {
+    'he-IL': ["מעניין...", "אני שומע...", "רגע..."],
+    'de-DE': ["Interessant...", "Ich verstehe...", "Moment..."],
+    'en-US': ["Interesting...", "I see...", "One moment..."],
+}
+
+def _get_filler(lang):
+    options = FILLERS.get(lang) or FILLERS['en-US']
+    return random.choice(options)
 
 # ---------------------------------------------------------------------------
 # Constants (mirror survey_view.py conventions)
@@ -280,28 +295,89 @@ def llm_handle_speech():
     voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
     twiml       = VoiceResponse()
 
-    # Fill in the answer for the pending (last) question
+    # Load history in main thread (read only — no writes here to avoid SQLite lock)
     history = _load_history(call_sid)
     if history and history[-1].get('a') == '':
         history[-1]['a'] = speech_result or '[no answer]'
     history = _truncate_history(history)
-    _save_history(call_sid, history)
 
-    # Survey complete?
+    # Survey complete? Save synchronously — no background work needed
     if q_num >= max_questions:
+        _save_history(call_sid, history)
         thanks = _read_from_json(lang, batch, THANKS, "messages")
         twiml.say(thanks, language=_twilio_lang(lang), voice=voice_model)
         twiml.hangup()
         print(f"[TIMING] llm_handle_speech total (survey done): {(time.time()-t_request)*1000:.1f}ms")
         return Response(str(twiml), mimetype='text/xml')
 
-    try:
-        next_q_num = q_num + 1
-        next_q     = _ask_llm(lang, batch, history, next_q_num, max_questions)
+    next_q_num = q_num + 1
 
-        history.append({"q": next_q, "a": ""})
-        history = _truncate_history(history)
-        _save_history(call_sid, history)
+    # Fire ALL DB writes + Groq in background — single writer avoids SQLite lock
+    event = threading.Event()
+    _pending_questions[call_sid] = {"q": None, "error": None, "event": event}
+
+    def _bg_llm(history_snap):
+        with app.app_context():
+            try:
+                _save_history(call_sid, history_snap)           # save filled answer
+                next_q = _ask_llm(lang, batch, history_snap, next_q_num, max_questions)
+                history_snap.append({"q": next_q, "a": ""})
+                _save_history(call_sid, _truncate_history(history_snap))  # save new question
+                _pending_questions[call_sid]["q"] = next_q
+            except Exception as e:
+                print(f"[BG LLM] error: {e}")
+                _pending_questions[call_sid]["error"] = str(e)
+            finally:
+                event.set()
+
+    threading.Thread(target=_bg_llm, args=(history,), daemon=True).start()
+
+    # Respond immediately — filler buys ~500ms while Groq runs in background
+    filler = _get_filler(lang)
+    twiml.say(filler, language=_twilio_lang(lang), voice=voice_model)
+    twiml.redirect(
+        f'/llm-next-question?q_num={next_q_num}&lang={lang}'
+        f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}',
+        method='POST',
+    )
+
+    print(f"[TIMING] llm_handle_speech total: {(time.time()-t_request)*1000:.1f}ms")
+    return Response(str(twiml), mimetype='text/xml')
+
+
+@app.route('/llm-next-question', methods=['POST'])
+def llm_next_question():
+    lang          = request.args.get('lang') or 'he-IL'
+    patient_name  = request.args.get('name') or 'noname'
+    batch         = request.args.get('batch') or 'basic'
+    q_num         = int(request.args.get('q_num', 2))
+    max_questions = int(request.args.get('max_q', 5))
+    call_sid      = request.form.get('CallSid', '')
+
+    t0 = time.time()
+    print(f"===== llm_next_question {datetime.now()} q={q_num} sid={call_sid} =====")
+
+    try:
+        voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
+        twiml       = VoiceResponse()
+
+        # Wait for background Groq result (should already be done — filler took ~500ms)
+        pending = _pending_questions.pop(call_sid, None)
+        if pending:
+            pending["event"].wait(timeout=3.0)
+            next_q = pending.get("q")
+            print(f"[TIMING] wait for bg: {(time.time()-t0)*1000:.1f}ms, ready={next_q is not None}")
+        else:
+            next_q = None
+            print(f"[TIMING] no pending entry — falling back to sync Groq call")
+
+        if not next_q:
+            # Fallback: background thread failed, call Groq synchronously
+            history = _load_history(call_sid)
+            next_q  = _ask_llm(lang, batch, history, q_num, max_questions)
+            history.append({"q": next_q, "a": ""})
+            _save_history(call_sid, _truncate_history(history))
+            print(f"[TIMING] sync fallback Groq: {(time.time()-t0)*1000:.1f}ms")
 
         gather = Gather(
             input='speech',
@@ -309,7 +385,7 @@ def llm_handle_speech():
             language=_twilio_lang(lang),
             speech_model='phone_call',
             action=(
-                f'/llm-handle-speech?q_num={next_q_num}&lang={lang}'
+                f'/llm-handle-speech?q_num={q_num}&lang={lang}'
                 f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}'
             ),
             method='POST',
@@ -322,11 +398,18 @@ def llm_handle_speech():
         twiml.hangup()
 
     except Exception as e:
-        print(f"Error in llm_handle_speech: {e}")
-        twiml.say("Sorry, there was a technical error.", language=_twilio_lang(lang))
+        import traceback
+        print(f"[ERROR] llm_next_question: {e}")
+        traceback.print_exc()
+        twiml = VoiceResponse()
+        try:
+            sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
+        except Exception:
+            sorry = "מצטערים, אירעה שגיאה."
+        twiml.say(sorry, language=_twilio_lang(lang))
         twiml.hangup()
 
-    print(f"[TIMING] llm_handle_speech total: {(time.time()-t_request)*1000:.1f}ms")
+    print(f"[TIMING] llm_next_question total: {(time.time()-t0)*1000:.1f}ms")
     return Response(str(twiml), mimetype='text/xml')
 
 
