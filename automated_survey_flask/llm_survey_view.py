@@ -198,6 +198,64 @@ def _ask_llm(lang, batch, history, q_num, max_questions):
     return resp.choices[0].message.content.strip()
 
 
+def _build_llm_messages(lang, batch, history, q_num, max_questions):
+    """Build the system/user message pair for Groq (shared by blocking and streaming callers)."""
+    base_qs  = _get_base_questions(lang, batch)
+    numbered = "\n".join(f"{i+1}. {q}" for i, q in enumerate(base_qs))
+
+    history_lines = ""
+    for i, entry in enumerate(history):
+        if entry.get('a') and entry['a'] != '[no answer]':
+            history_lines += f"Q{i+1}: {entry['q']}\nA{i+1}: {entry['a']}\n"
+
+    system_prompt = (
+        f"You are a warm, empathetic mental health interviewer conducting a voice survey by phone.\n\n"
+        f"LANGUAGE RULE (absolute — no exceptions):\n"
+        f"You MUST write every single word of your output in the language of locale {lang}. "
+        f"Never switch to any other language, even if the patient's transcribed answer appears "
+        f"to be in a different language.\n\n"
+        f"Topics to explore (a flexible guide — NOT a fixed script):\n{numbered}\n\n"
+        f"Rules:\n"
+        f"1. SKIP topics already answered directly or indirectly.\n"
+        f"2. Briefly acknowledge pain or sadness before moving on.\n"
+        f"3. React to what the patient JUST said.\n"
+        f"4. Be warm and informal.\n"
+        f"5. Ask exactly ONE short question (one sentence).\n"
+        f"6. Output ONLY the question text — no labels, no preamble.\n"
+        f"7. This is question {q_num} of {max_questions} total."
+    )
+    user_content = (
+        f"Conversation so far:\n{history_lines}\n\n"
+        f"The patient's last answer was: \"{history[-1]['a'] if history and history[-1].get('a') else ''}\"\n"
+        f"Generate question {q_num}, reacting to what they just said."
+        if history_lines else
+        f"Generate question {q_num} (opening question)."
+    )
+    return system_prompt, user_content
+
+
+def ask_llm_stream(lang, batch, history, q_num, max_questions):
+    """Generator — yields text tokens from Groq for use with ConversationRelay streaming."""
+    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions)
+    client = _get_groq_client()
+    t0 = time.time()
+    stream = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_content},
+        ],
+        max_tokens=80,
+        temperature=0.7,
+        stream=True,
+    )
+    for chunk in stream:
+        token = chunk.choices[0].delta.content
+        if token:
+            yield token
+    print(f"[TIMING] Groq stream complete: {(time.time()-t0)*1000:.1f}ms")
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------

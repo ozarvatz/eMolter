@@ -44,6 +44,8 @@ def prepare_app(environment=env, p_db=db):
     csrf.exempt('automated_survey_flask.llm_survey_view.llm_handle_speech')
     csrf.exempt('automated_survey_flask.llm_survey_view.llm_next_question')
     csrf.exempt('automated_survey_flask.llm_survey_view.llm_recording_callback')
+    csrf.exempt('automated_survey_flask.conversation_relay_view.llm_relay_voice')
+    csrf.exempt('automated_survey_flask.conversation_relay_view.ws_conversation')
 
     # load views by importing them
     from . import views # noqa F401
@@ -63,4 +65,9 @@ def save_and_commit(item):
 
 
 db.save = save_and_commit
+
+# Auto-prepare when loaded by gunicorn (or any direct import).
+# Tests override this by calling prepare_app(environment='testing') afterwards.
+if os.environ.get('FLASK_TESTING') != '1':
+    prepare_app()
 

@@ -31,8 +31,8 @@ else
     # --- 3. Forceful Cleanup ---
     # Kill whatever is holding port 5000 (clears the socket)
     fuser -k 5000/tcp > /dev/null 2>&1
-    # Kill the specific flask process
-    pkill -u mtrapp -f "flask run"
+    # Kill gunicorn master process
+    pkill -u mtrapp -f "gunicorn"
 
     sleep 2
 
@@ -41,9 +41,8 @@ else
     if [ -f "venv_38/bin/activate" ]; then
         source venv_38/bin/activate
 
-        # Start using the python module directly for better stability
-        nohup python3 -m flask run --host=0.0.0.0 --port=5000 \
-            --cert="$CERT" --key="$KEY" >> "$SERVER_OUT" 2>&1 &
+        # gunicorn with GeventWebSocketWorker for WebSocket (ConversationRelay) support
+        nohup gunicorn --chdir "$APP_DIR" --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker --workers 1 --bind 0.0.0.0:5000 --certfile="$CERT" --keyfile="$KEY" --timeout 120 "automated_survey_flask:app" >> "$SERVER_OUT" 2>&1 &
 
         if [ $? -eq 0 ]; then
             echo "$(date): Server restart command issued successfully." >> "$WATCHDOG_LOG"
