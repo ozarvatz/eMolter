@@ -18,9 +18,9 @@ from .models import db, Call, Patient
 _pending_questions = {}
 
 FILLERS = {
-    'he-IL': ["מעניין...", "אני שומע...", "רגע..."],
-    'de-DE': ["Interessant...", "Ich verstehe...", "Moment..."],
-    'en-US': ["Interesting...", "I see...", "One moment..."],
+    'he-IL': ["מעניין... תן לי לחשוב רגע.", "אני שומע אותך... רגע אחד.", "בסדר... נמשיך."],
+    'de-DE': ["Interessant... einen Moment bitte.", "Ich verstehe... lass mich kurz überlegen.", "Gut... einen Augenblick."],
+    'en-US': ["Interesting... let me think for a moment.", "I see... just a second.", "I understand... one moment."],
 }
 
 def _get_filler(lang):

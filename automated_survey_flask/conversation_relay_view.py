@@ -8,7 +8,7 @@ from flask_login import login_required, current_user
 
 from . import app
 from .models import db, Call, Patient
-from .llm_survey_view import ask_llm_stream, _twilio_lang, THANKS, HELLO, VOICE_ALGO, SORRY_FAILED
+from .llm_survey_view import ask_llm_stream, _twilio_lang, _get_filler, THANKS, HELLO, VOICE_ALGO, SORRY_FAILED
 
 TWILIO_NUMBER = "+17473023043"
 BASE_URL      = "https://www.emolter.org:5000"
@@ -55,7 +55,9 @@ def llm_relay_voice():
         f' language="{lang}"'
         f' voice="{voice_model}"'
         f' dtmfDetection="false"'
-        f' interruptByDtmf="false"/>'
+        f' interruptByDtmf="false"'
+        f' interruptionThreshold="100"'
+        f' speechTimeout="1000"/>'
         f'</Connect>'
         '</Response>'
     )
@@ -162,6 +164,7 @@ def ws_conversation():
                     break
 
                 q_num += 1
+                send({"type": "text", "token": _get_filler(lang) + " ", "last": False})
                 next_q = stream_next_question(history, q_num)
                 print(f"[TIMING] stream q{q_num}: {(time.time()-t0)*1000:.1f}ms → '{next_q[:60]}'")
 
