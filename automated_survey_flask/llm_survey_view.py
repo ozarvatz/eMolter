@@ -3,9 +3,13 @@ import json
 import time
 import threading
 import random
+import base64
+import hashlib
+from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime
 
+import requests as http_requests
 from flask import request, session, Response, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
 from twilio.rest import Client
@@ -18,9 +22,9 @@ from .models import db, Call, Patient
 _pending_questions = {}
 
 FILLERS = {
-    'he-IL': ["מעניין... תן לי לחשוב רגע.", "אני שומע אותך... רגע אחד.", "בסדר... נמשיך."],
-    'de-DE': ["Interessant... einen Moment bitte.", "Ich verstehe... lass mich kurz überlegen.", "Gut... einen Augenblick."],
-    'en-US': ["Interesting... let me think for a moment.", "I see... just a second.", "I understand... one moment."],
+    'he-IL': ["רגע.", "אוקיי.", "הבנתי."],
+    'de-DE': ["Moment.", "Okay.", "Verstanden."],
+    'en-US': ["One sec.", "Okay.", "Got it."],
 }
 
 def _get_filler(lang):
@@ -44,6 +48,41 @@ LLM_MODEL         = os.environ.get('GROQ_MODEL', 'llama-3.1-8b-instant')
 MAX_HISTORY_CHARS = 3000
 TWILIO_NUMBER     = "+17473023043"
 BASE_URL          = "https://www.emolter.org:5000"
+
+# ---------------------------------------------------------------------------
+# Google Cloud TTS — generate audio directly, play via <Play>, skip Twilio TTS
+# ---------------------------------------------------------------------------
+GOOGLE_TTS_API_KEY = os.environ.get('GOOGLE_TTS_API_KEY', '')
+
+_LANG_TO_VOICE = {
+    'he-IL': 'he-IL-Standard-A',
+    'de-DE': 'de-DE-Standard-A',
+    'en-US': 'en-US-Standard-B',
+}
+
+_TTS_CACHE_DIR = Path(__file__).parent / 'static' / 'tts'
+_TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _google_tts_url(text, lang='he-IL', voice_model=None):
+    """Generate (or return cached) MP3 via Google TTS REST and return public URL.
+    Caches by hash of (voice, text) so identical phrases (fillers, greetings) are reused."""
+    voice_name = (voice_model or '').replace('Google.', '') or _LANG_TO_VOICE.get(lang, 'en-US-Standard-B')
+    key = hashlib.md5(f"{voice_name}:{text}".encode('utf-8')).hexdigest()
+    fpath = _TTS_CACHE_DIR / f"{key}.mp3"
+
+    if not fpath.exists():
+        url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={GOOGLE_TTS_API_KEY}"
+        payload = {
+            "input": {"text": text},
+            "voice": {"languageCode": lang, "name": voice_name},
+            "audioConfig": {"audioEncoding": "MP3"},
+        }
+        resp = http_requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        fpath.write_bytes(base64.b64decode(resp.json()['audioContent']))
+
+    return f"{BASE_URL}/static/tts/{key}.mp3"
 
 # ---------------------------------------------------------------------------
 # Groq client (lazy-initialised so a missing key only fails when routes hit)
@@ -231,6 +270,38 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions):
         if history_lines else
         f"Generate question {q_num} (opening question)."
     )
+    if lang == 'he-IL':
+        system_prompt = (
+            f"""
+                ### הגדרת דמות (Persona)
+                אתה מראיין קולי בסקר בריאות נפש. אתה עוגן של רוגע: חם, יציב, ובלתי ניתן לערעור.
+                אנשים עשויים לפרוק אצלך קשיים גדולים או לדבר בכאב – התפקיד שלך הוא "לנשום עמוק", להכיל את הדברים ברוגע, ולהמשיך את הראיון בלי להיבהל ובלי להפוך למטפל.
+
+                ### חוקי התנהגות
+                1. **רוגע מקסימלי:** גם אם נאמרים דברים קשים, אל תצא מאיזון. אל תהיה דרמטי. תן תגובה קצרה, יציבה ואמפתית.
+                2. **אי-לקיחת אחריות:** אל תיתן עצות רפואיות או הבטחות לפתרון. אתה כאן רק כדי לשמוע ולשאול.
+                3. **מבנה פלט (חובה):**
+                - [תגובה קצרה ומכילה] + [שאלה אחת לסיום].
+                - דוגמה: "אני שומע שזה היה שבוע מאוד עמוס רגשית. איך התיאבון שלך בימים האחרונים?"
+                4. **עברית מדוברת ({lang}):** בלי שפה גבוהה, בלי "אני מצטער לשמוע". דבר פשוט, אנושי ורגוע.
+
+                ### הנחיות טכניות
+                - פלט אך ורק את הטקסט להקראה.
+                - שאל שאלה אחת בלבד, תמיד בסוף.
+                - דלג על נושאים שנענו: {numbered}.
+                - שאלה {q_num} מתוך {max_questions}.
+            """
+        )
+        if not history_lines:
+            user_content = f"התחל את הראיון. פנה למטופל בחום ורוגע, ושאל את השאלה הראשונה ."
+        else:
+            last_answer = history[-1]['a'] if history and history[-1].get('a') else ''
+            user_content = (
+                f"היסטוריית השיחה:\n{history_lines}\n\n"
+                f"מה שהמטופל אמר הרגע: \"{last_answer}\"\n\n"
+                f"משימה: תן תגובה קצרה ומכילה למה שנאמר (בטון רגוע ויציב), "
+                f"ואז שאל את שאלה מספר {q_num} מתוך {max_questions}."
+            )
     return system_prompt, user_content
 
 
@@ -312,7 +383,7 @@ def llm_voice_survey():
         twiml.pause(length=1)
         gather = Gather(
             input='speech',
-            speech_timeout='auto',
+            speech_timeout=1,
             language=_twilio_lang(lang),
             speech_model='phone_call',
             action=(
@@ -321,16 +392,16 @@ def llm_voice_survey():
             ),
             method='POST',
         )
-        gather.say(intro_q, language=_twilio_lang(lang), voice=voice_model)
+        gather.play(_google_tts_url(intro_q, lang, voice_model))
         twiml.append(gather)
-        twiml.say(sorry, language=_twilio_lang(lang), voice=voice_model)
+        twiml.play(_google_tts_url(sorry, lang, voice_model))
         twiml.hangup()
 
     except Exception as e:
         import traceback
         print(f"Error in llm_voice_survey: {e}")
         traceback.print_exc()
-        twiml.say("Sorry, there was a technical error.", language=_twilio_lang(lang))
+        twiml.play(_google_tts_url("Sorry, there was a technical error.", lang))
         twiml.hangup()
 
     return Response(str(twiml), mimetype='text/xml')
@@ -363,7 +434,7 @@ def llm_handle_speech():
     if q_num >= max_questions:
         _save_history(call_sid, history)
         thanks = _read_from_json(lang, batch, THANKS, "messages")
-        twiml.say(thanks, language=_twilio_lang(lang), voice=voice_model)
+        twiml.play(_google_tts_url(thanks, lang, voice_model))
         twiml.hangup()
         print(f"[TIMING] llm_handle_speech total (survey done): {(time.time()-t_request)*1000:.1f}ms")
         return Response(str(twiml), mimetype='text/xml')
@@ -392,7 +463,7 @@ def llm_handle_speech():
 
     # Respond immediately — filler buys ~500ms while Groq runs in background
     filler = _get_filler(lang)
-    twiml.say(filler, language=_twilio_lang(lang), voice=voice_model)
+    twiml.play(_google_tts_url(filler, lang, voice_model))
     twiml.redirect(
         f'/llm-next-question?q_num={next_q_num}&lang={lang}'
         f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}',
@@ -439,7 +510,7 @@ def llm_next_question():
 
         gather = Gather(
             input='speech',
-            speech_timeout='auto',
+            speech_timeout=1,
             language=_twilio_lang(lang),
             speech_model='phone_call',
             action=(
@@ -448,11 +519,11 @@ def llm_next_question():
             ),
             method='POST',
         )
-        gather.say(next_q, language=_twilio_lang(lang), voice=voice_model)
+        gather.play(_google_tts_url(next_q, lang, voice_model))
         twiml.append(gather)
 
         sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
-        twiml.say(sorry, language=_twilio_lang(lang), voice=voice_model)
+        twiml.play(_google_tts_url(sorry, lang, voice_model))
         twiml.hangup()
 
     except Exception as e:
@@ -464,7 +535,7 @@ def llm_next_question():
             sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
         except Exception:
             sorry = "מצטערים, אירעה שגיאה."
-        twiml.say(sorry, language=_twilio_lang(lang))
+        twiml.play(_google_tts_url(sorry, lang))
         twiml.hangup()
 
     print(f"[TIMING] llm_next_question total: {(time.time()-t0)*1000:.1f}ms")
