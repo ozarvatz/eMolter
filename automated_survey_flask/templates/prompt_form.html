@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if prompt else 'New' }} Prompt - eMolter{% endblock %}
+
+{% block content %}
+<h1>{{ 'Edit' if prompt else 'New' }} LLM Prompt</h1>
+
+<div class="alert alert-info">
+    <strong>Available placeholders:</strong>
+    {% for ph in placeholders %}<code>{{ ph }}</code>{{ ", " if not loop.last }}{% endfor %}
+</div>
+
+<form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+    <div class="form-group">
+        <label for="lang">Language *</label>
+        <select class="form-control" id="lang" name="lang" required>
+            {% for code, label in supported_langs %}
+                <option value="{{ code }}" {{ 'selected' if prompt and prompt.lang == code else '' }}>{{ label }} ({{ code }})</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="system_template">System Template *</label>
+        <textarea class="form-control" id="system_template" name="system_template"
+                  rows="14" required style="font-family: monospace;">{{ prompt.system_template if prompt else '' }}</textarea>
+    </div>
+
+    <div class="form-group">
+        <label for="user_template_first">User Template — First Question *</label>
+        <p class="text-muted small">Used when the conversation has no answered questions yet (opening turn).</p>
+        <textarea class="form-control" id="user_template_first" name="user_template_first"
+                  rows="3" required style="font-family: monospace;">{{ prompt.user_template_first if prompt else '' }}</textarea>
+    </div>
+
+    <div class="form-group">
+        <label for="user_template_followup">User Template — Follow-up Question *</label>
+        <p class="text-muted small">Used on every turn after the patient has given at least one answer.</p>
+        <textarea class="form-control" id="user_template_followup" name="user_template_followup"
+                  rows="6" required style="font-family: monospace;">{{ prompt.user_template_followup if prompt else '' }}</textarea>
+    </div>
+
+    <div class="form-group">
+        <label for="notes">Notes</label>
+        <input type="text" class="form-control" id="notes" name="notes"
+               value="{{ prompt.notes if prompt and prompt.notes else '' }}"
+               placeholder="Why this version exists, what changed, etc.">
+    </div>
+
+    <div class="checkbox">
+        <label>
+            <input type="checkbox" name="active" {{ 'checked' if prompt and prompt.active else '' }}>
+            Active (will deactivate any other prompt for the same language)
+        </label>
+    </div>
+
+    <button type="submit" class="btn btn-primary">{{ 'Update' if prompt else 'Create' }} Prompt</button>
+    <a href="{{ url_for('prompt_list') }}" class="btn btn-default">Cancel</a>
+</form>
+{% endblock %}

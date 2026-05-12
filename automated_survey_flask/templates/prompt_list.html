@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}LLM Prompts - eMolter{% endblock %}
+
+{% block content %}
+<h1>LLM Prompts</h1>
+<p class="text-muted">Per-language prompts used by the Groq LLM. Only one prompt per language can be <strong>active</strong> at a time.</p>
+<a href="{{ url_for('prompt_new') }}" class="btn btn-primary" style="margin-bottom: 15px;">New Prompt</a>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Language</th>
+            <th>Active</th>
+            <th>Notes</th>
+            <th>Updated</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in prompts %}
+        <tr>
+            <td>{{ p.id }}</td>
+            <td>{{ p.lang }}</td>
+            <td>
+                {% if p.active %}
+                    <span class="label label-success">Active</span>
+                {% else %}
+                    <span class="label label-default">Inactive</span>
+                {% endif %}
+            </td>
+            <td>{{ p.notes or '-' }}</td>
+            <td>{{ p.updated_at.strftime('%Y-%m-%d %H:%M') if p.updated_at else '-' }}</td>
+            <td>
+                <a href="{{ url_for('prompt_edit', id=p.id) }}" class="btn btn-sm btn-default">Edit</a>
+                {% if not p.active %}
+                    <form method="POST" action="{{ url_for('prompt_activate', id=p.id) }}" style="display:inline;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        <button type="submit" class="btn btn-sm btn-success">Activate</button>
+                    </form>
+                    <form method="POST" action="{{ url_for('prompt_delete', id=p.id) }}"
+                          style="display:inline;" onsubmit="return confirm('Delete this prompt?');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                    </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">No prompts yet.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

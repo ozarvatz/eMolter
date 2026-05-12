@@ -30,6 +30,7 @@
                     <li><a href="{{ url_for('patient_list') }}">Patients</a></li>
                     {% if current_user.is_superuser %}
                         <li><a href="{{ url_for('therapist_list') }}">Therapists</a></li>
+                        <li><a href="{{ url_for('prompt_list') }}">Prompts</a></li>
                     {% endif %}
                     <li><a href="{{ url_for('question_set_list') }}">Questions</a></li>
                     <li><a href="{{ url_for('logout') }}">Logout ({{ current_user.nickname }})</a></li>

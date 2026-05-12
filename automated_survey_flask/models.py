@@ -207,6 +207,30 @@ class QuestionSet(db.Model):
         return [q['body'] for q in self.content.get('questions', [])]
 
 
+class LlmPrompt(db.Model):
+    """Per-language LLM system+user prompt templates. Only one row per lang has active=True."""
+    __tablename__ = 'llm_prompts'
+
+    id                     = db.Column(db.Integer, primary_key=True)
+    lang                   = db.Column(db.String(10), nullable=False)
+    system_template        = db.Column(db.Text, nullable=False)
+    user_template_first    = db.Column(db.Text, nullable=False)
+    user_template_followup = db.Column(db.Text, nullable=False)
+    active                 = db.Column(db.Boolean, nullable=False, default=False)
+    notes                  = db.Column(db.Text, nullable=True)
+    created_at             = db.Column(db.DateTime, default=db.func.now())
+    updated_at             = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    updated_by_id          = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    __table_args__ = (
+        db.Index('ix_llm_prompts_lang_active', 'lang', 'active'),
+    )
+
+    @classmethod
+    def active_for(cls, lang):
+        return cls.query.filter_by(lang=lang, active=True).first()
+
+
 class ProsodyParameter(db.Model):
     __tablename__ = 'prosody_parameters'
 

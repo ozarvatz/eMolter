@@ -180,47 +180,52 @@ def _truncate_history(history):
 # ---------------------------------------------------------------------------
 # LLM call
 # ---------------------------------------------------------------------------
-def _ask_llm(lang, batch, history, q_num, max_questions):
-    """Ask Groq to generate the next survey question."""
+def _build_llm_messages(lang, batch, history, q_num, max_questions):
+    """Build (system_prompt, user_content) for Groq from the active LlmPrompt row for `lang`.
+
+    Templates support these placeholders (Python str.format):
+      {lang}, {numbered}, {q_num}, {max_questions}, {history_lines}, {last_answer}
+
+    Raises RuntimeError if no active LlmPrompt exists for the language —
+    we never silently fall back; configure one at /admin/prompts.
+    """
+    from automated_survey_flask.models import LlmPrompt
+
+    prompt = LlmPrompt.active_for(lang)
+    if not prompt:
+        raise RuntimeError(
+            f"No active LlmPrompt for lang={lang}. "
+            f"Seed one via migration or activate one at /admin/prompts."
+        )
+
     base_qs  = _get_base_questions(lang, batch)
     numbered = "\n".join(f"{i+1}. {q}" for i, q in enumerate(base_qs))
 
-    # Build history text (only entries that have a real answer)
     history_lines = ""
     for i, entry in enumerate(history):
         if entry.get('a') and entry['a'] != '[no answer]':
             history_lines += f"Q{i+1}: {entry['q']}\nA{i+1}: {entry['a']}\n"
 
-    system_prompt = (
-        f"You are a warm, empathetic mental health interviewer conducting a voice survey by phone.\n\n"
-        f"LANGUAGE RULE (absolute — no exceptions):\n"
-        f"You MUST write every single word of your output in the language of locale {lang}. "
-        f"Never switch to any other language, even if the patient's transcribed answer appears "
-        f"to be in a different language. Phone speech-to-text is imperfect; assume the patient "
-        f"is always speaking {lang} and infer their intent from context.\n\n"
-        f"Topics to explore during the survey (a flexible guide — NOT a fixed script):\n"
-        f"{numbered}\n\n"
-        f"Rules — follow these strictly:\n"
-        f"1. SKIP any topic the patient already answered directly OR indirectly. "
-        f"If they said they feel terrible, never ask 'are you feeling well?' — that is already answered. "
-        f"Move to a genuinely new angle.\n"
-        f"2. If the patient shared something sad, painful, or difficult, briefly acknowledge it with warmth "
-        f"before moving forward — never ignore their emotional state.\n"
-        f"3. React to what the patient JUST said, not to the fixed topic list. "
-        f"Let the conversation flow naturally from their last answer.\n"
-        f"4. Be warm, informal, and human — like a caring person, not a questionnaire.\n"
-        f"5. Ask exactly ONE short question (one sentence, suitable for a phone call).\n"
-        f"6. Output ONLY the question text — no labels, no preamble, no explanations.\n"
-        f"7. This is question {q_num} of {max_questions} total."
-    )
+    last_answer = history[-1]['a'] if history and history[-1].get('a') else ''
 
-    user_content = (
-        f"Conversation so far:\n{history_lines}\n\n"
-        f"The patient's last answer was: \"{history[-1]['a'] if history and history[-1].get('a') else ''}\"\n"
-        f"Generate question {q_num}, reacting to what they just said."
-        if history_lines else
-        f"Generate question {q_num} (opening question)."
-    )
+    variables = {
+        'lang': lang,
+        'numbered': numbered,
+        'q_num': q_num,
+        'max_questions': max_questions,
+        'history_lines': history_lines,
+        'last_answer': last_answer,
+    }
+
+    system_prompt = prompt.system_template.format(**variables)
+    user_template = prompt.user_template_followup if history_lines else prompt.user_template_first
+    user_content  = user_template.format(**variables)
+    return system_prompt, user_content
+
+
+def _ask_llm(lang, batch, history, q_num, max_questions):
+    """Ask Groq to generate the next survey question (synchronous)."""
+    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions)
 
     client = _get_groq_client()
     t0 = time.time()
@@ -237,72 +242,28 @@ def _ask_llm(lang, batch, history, q_num, max_questions):
     return resp.choices[0].message.content.strip()
 
 
-def _build_llm_messages(lang, batch, history, q_num, max_questions):
-    """Build the system/user message pair for Groq (shared by blocking and streaming callers)."""
-    base_qs  = _get_base_questions(lang, batch)
-    numbered = "\n".join(f"{i+1}. {q}" for i, q in enumerate(base_qs))
-
-    history_lines = ""
-    for i, entry in enumerate(history):
-        if entry.get('a') and entry['a'] != '[no answer]':
-            history_lines += f"Q{i+1}: {entry['q']}\nA{i+1}: {entry['a']}\n"
-
-    system_prompt = (
-        f"You are a warm, empathetic mental health interviewer conducting a voice survey by phone.\n\n"
-        f"LANGUAGE RULE (absolute — no exceptions):\n"
-        f"You MUST write every single word of your output in the language of locale {lang}. "
-        f"Never switch to any other language, even if the patient's transcribed answer appears "
-        f"to be in a different language.\n\n"
-        f"Topics to explore (a flexible guide — NOT a fixed script):\n{numbered}\n\n"
-        f"Rules:\n"
-        f"1. SKIP topics already answered directly or indirectly.\n"
-        f"2. Briefly acknowledge pain or sadness before moving on.\n"
-        f"3. React to what the patient JUST said.\n"
-        f"4. Be warm and informal.\n"
-        f"5. Ask exactly ONE short question (one sentence).\n"
-        f"6. Output ONLY the question text — no labels, no preamble.\n"
-        f"7. This is question {q_num} of {max_questions} total."
-    )
-    user_content = (
-        f"Conversation so far:\n{history_lines}\n\n"
-        f"The patient's last answer was: \"{history[-1]['a'] if history and history[-1].get('a') else ''}\"\n"
-        f"Generate question {q_num}, reacting to what they just said."
-        if history_lines else
-        f"Generate question {q_num} (opening question)."
-    )
-    if lang == 'he-IL':
-        system_prompt = (
-            f"""
-                ### הגדרת דמות (Persona)
-                אתה מראיין קולי בסקר בריאות נפש. אתה עוגן של רוגע: חם, יציב, ובלתי ניתן לערעור.
-                אנשים עשויים לפרוק אצלך קשיים גדולים או לדבר בכאב – התפקיד שלך הוא "לנשום עמוק", להכיל את הדברים ברוגע, ולהמשיך את הראיון בלי להיבהל ובלי להפוך למטפל.
-
-                ### חוקי התנהגות
-                1. **רוגע מקסימלי:** גם אם נאמרים דברים קשים, אל תצא מאיזון. אל תהיה דרמטי. תן תגובה קצרה, יציבה ואמפתית.
-                2. **אי-לקיחת אחריות:** אל תיתן עצות רפואיות או הבטחות לפתרון. אתה כאן רק כדי לשמוע ולשאול.
-                3. **מבנה פלט (חובה):**
-                - [תגובה קצרה ומכילה] + [שאלה אחת לסיום].
-                - דוגמה: "אני שומע שזה היה שבוע מאוד עמוס רגשית. איך התיאבון שלך בימים האחרונים?"
-                4. **עברית מדוברת ({lang}):** בלי שפה גבוהה, בלי "אני מצטער לשמוע". דבר פשוט, אנושי ורגוע.
-
-                ### הנחיות טכניות
-                - פלט אך ורק את הטקסט להקראה.
-                - שאל שאלה אחת בלבד, תמיד בסוף.
-                - דלג על נושאים שנענו: {numbered}.
-                - שאלה {q_num} מתוך {max_questions}.
-            """
-        )
-        if not history_lines:
-            user_content = f"התחל את הראיון. פנה למטופל בחום ורוגע, ושאל את השאלה הראשונה ."
-        else:
-            last_answer = history[-1]['a'] if history and history[-1].get('a') else ''
-            user_content = (
-                f"היסטוריית השיחה:\n{history_lines}\n\n"
-                f"מה שהמטופל אמר הרגע: \"{last_answer}\"\n\n"
-                f"משימה: תן תגובה קצרה ומכילה למה שנאמר (בטון רגוע ויציב), "
-                f"ואז שאל את שאלה מספר {q_num} מתוך {max_questions}."
-            )
-    return system_prompt, user_content
+# ---------------------------------------------------------------------------
+# Old hardcoded prompts — kept here for reference. Source of truth is now
+# the LlmPrompt table (seeded by migration c9f1a2b3d4e5). Edit prompts via
+# /admin/prompts; do not re-enable these blocks.
+# ---------------------------------------------------------------------------
+# OLD English (pre-DB) system_prompt:
+#   "You are a warm, empathetic mental health interviewer conducting a voice survey by phone.
+#   ...
+#   1. SKIP any topic the patient already answered directly OR indirectly. ...
+#   2. If the patient shared something sad, painful, or difficult, briefly acknowledge ...
+#   3. React to what the patient JUST said, ...
+#   4. Be warm, informal, and human ...
+#   5. Ask exactly ONE short question (one sentence ...)
+#   6. Output ONLY the question text — no labels, no preamble, no explanations.
+#   7. This is question {q_num} of {max_questions} total."
+#
+# OLD Hebrew (pre-DB) system_prompt:
+#   "### הגדרת דמות (Persona)
+#    אתה מראיין קולי בסקר בריאות נפש. אתה עוגן של רוגע: חם, יציב, ובלתי ניתן לערעור.
+#    ...
+#    - דלג על נושאים שנענו: {numbered}.
+#    - שאלה {q_num} מתוך {max_questions}."
 
 
 def ask_llm_stream(lang, batch, history, q_num, max_questions):

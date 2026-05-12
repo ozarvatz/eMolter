@@ -2,7 +2,10 @@ from flask import render_template, request, redirect, url_for, flash, abort
 from flask_login import login_required, current_user
 from functools import wraps
 from automated_survey_flask import app, db
-from automated_survey_flask.models import User
+from automated_survey_flask.models import User, LlmPrompt
+
+SUPPORTED_LANGS = [('he-IL', 'Hebrew'), ('en-US', 'English'), ('de-DE', 'German')]
+PROMPT_PLACEHOLDERS = ['{lang}', '{numbered}', '{q_num}', '{max_questions}', '{history_lines}', '{last_answer}']
 
 
 def superuser_required(f):
@@ -59,3 +62,110 @@ def therapist_delete(id):
     db.session.commit()
     flash(f'Therapist {therapist.nickname} deleted successfully', 'success')
     return redirect(url_for('therapist_list'))
+
+
+# ---------------------------------------------------------------------------
+# LLM Prompts — per-language Groq system/user templates. Only one row per
+# language has active=True. Editing/activating is superuser-only.
+# ---------------------------------------------------------------------------
+@app.route('/admin/prompts')
+@login_required
+@superuser_required
+def prompt_list():
+    prompts = LlmPrompt.query.order_by(LlmPrompt.lang, LlmPrompt.active.desc(), LlmPrompt.updated_at.desc()).all()
+    return render_template(
+        'prompt_list.html',
+        prompts=prompts,
+        supported_langs=SUPPORTED_LANGS,
+    )
+
+
+@app.route('/admin/prompts/new', methods=['GET', 'POST'])
+@login_required
+@superuser_required
+def prompt_new():
+    if request.method == 'POST':
+        return _save_prompt(None)
+    return render_template(
+        'prompt_form.html',
+        prompt=None,
+        supported_langs=SUPPORTED_LANGS,
+        placeholders=PROMPT_PLACEHOLDERS,
+    )
+
+
+@app.route('/admin/prompts/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+@superuser_required
+def prompt_edit(id):
+    prompt = LlmPrompt.query.get_or_404(id)
+    if request.method == 'POST':
+        return _save_prompt(prompt)
+    return render_template(
+        'prompt_form.html',
+        prompt=prompt,
+        supported_langs=SUPPORTED_LANGS,
+        placeholders=PROMPT_PLACEHOLDERS,
+    )
+
+
+@app.route('/admin/prompts/<int:id>/activate', methods=['POST'])
+@login_required
+@superuser_required
+def prompt_activate(id):
+    prompt = LlmPrompt.query.get_or_404(id)
+    LlmPrompt.query.filter_by(lang=prompt.lang).update({'active': False})
+    prompt.active = True
+    prompt.updated_by_id = current_user.id
+    db.session.commit()
+    flash(f'Activated prompt #{prompt.id} for {prompt.lang}', 'success')
+    return redirect(url_for('prompt_list'))
+
+
+@app.route('/admin/prompts/<int:id>/delete', methods=['POST'])
+@login_required
+@superuser_required
+def prompt_delete(id):
+    prompt = LlmPrompt.query.get_or_404(id)
+    if prompt.active:
+        flash('Cannot delete an active prompt. Activate another one first.', 'error')
+        return redirect(url_for('prompt_list'))
+    db.session.delete(prompt)
+    db.session.commit()
+    flash(f'Deleted prompt #{id}', 'success')
+    return redirect(url_for('prompt_list'))
+
+
+def _save_prompt(prompt):
+    """Shared create/update logic. If activating, deactivate all others for the same lang."""
+    lang   = request.form.get('lang', '').strip()
+    system = request.form.get('system_template', '')
+    first  = request.form.get('user_template_first', '')
+    follow = request.form.get('user_template_followup', '')
+    notes  = request.form.get('notes', '').strip() or None
+    active = request.form.get('active') == 'on'
+
+    if not lang or not system or not first or not follow:
+        flash('Language and all three templates are required.', 'error')
+        return redirect(request.url)
+
+    if prompt is None:
+        prompt = LlmPrompt(lang=lang)
+        db.session.add(prompt)
+
+    prompt.lang                   = lang
+    prompt.system_template        = system
+    prompt.user_template_first    = first
+    prompt.user_template_followup = follow
+    prompt.notes                  = notes
+    prompt.updated_by_id          = current_user.id
+
+    if active:
+        LlmPrompt.query.filter(LlmPrompt.lang == lang, LlmPrompt.id != (prompt.id or -1)).update({'active': False})
+        prompt.active = True
+    else:
+        prompt.active = False
+
+    db.session.commit()
+    flash(f'Prompt saved for {lang} (active={prompt.active})', 'success')
+    return redirect(url_for('prompt_list'))
