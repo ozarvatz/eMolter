@@ -11,8 +11,12 @@
             <th>Name</th>
             <th>Nickname</th>
             <th>Phone</th>
+            <th>Gender</th>
+            <th>Birth Yr</th>
+            <th>Treatment</th>
             <th>Batch</th>
             <th>Language</th>
+            <th>Schedule</th>
             {% if current_user.is_superuser %}<th>Therapist</th>{% endif %}
             <th>Actions</th>
         </tr>
@@ -23,8 +27,21 @@
             <td>{{ patient.name }}</td>
             <td>{{ patient.nickname or '-' }}</td>
             <td>{{ patient.phone }}</td>
+            <td>{{ patient.gender or '-' }}</td>
+            <td>{{ patient.birth_year or '-' }}</td>
+            <td>{{ patient.treatment or '-' }}</td>
             <td>{{ patient.batch or '-' }}</td>
             <td>{{ patient.language }}</td>
+            <td>
+                {% set sched = patient.schedules|first if patient.schedules else None %}
+                {% if sched and sched.active %}
+                    {{ sched.frequency }} @ {{ '%02d:00' % sched.hour }}
+                {% elif sched %}
+                    <span class="text-muted">{{ sched.frequency }} (off)</span>
+                {% else %}
+                    -
+                {% endif %}
+            </td>
             {% if current_user.is_superuser %}<td>{{ patient.therapist.nickname if patient.therapist else '-' }}</td>{% endif %}
             <td>
                 <a href="{{ url_for('patient_edit', id=patient.id) }}" class="btn btn-sm btn-default">Edit</a>

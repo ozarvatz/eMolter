@@ -198,6 +198,77 @@ def seed_question_sets():
 
 
 @manager.command
+def run_scheduled_calls():
+    """Fire any patient call schedules that are due. Intended to be run hourly via cron:
+        0 * * * * cd /home/mtrapp/appl/automated-survey-flask && venv_38/bin/python manage.py run_scheduled_calls
+    """
+    from datetime import datetime
+    from twilio.rest import Client
+    from urllib.parse import quote
+    import os as _os
+    from automated_survey_flask.models import Call, CallSchedule, Patient
+    from automated_survey_flask.therapist_view import snapshot_patient_to_call
+
+    TWILIO_NUMBER = "+17473023043"
+    BASE_URL      = "https://www.emolter.org:5000"
+
+    client = Client(_os.environ.get('TWILIO_ACCOUNT_SID'), _os.environ.get('TWILIO_AUTH_TOKEN'))
+
+    now = datetime.now()
+    schedules = CallSchedule.query.filter_by(active=True, hour=now.hour).all()
+    print(f"[scheduler] {now.isoformat(timespec='minutes')} — {len(schedules)} active schedule(s) at hour {now.hour}")
+
+    fired = 0
+    for sched in schedules:
+        if not sched.is_due(now):
+            continue
+        patient = Patient.query.filter_by(id=sched.patient_id, deleted=False).first()
+        if not patient:
+            print(f"[scheduler] schedule {sched.id} skipped — patient {sched.patient_id} missing or deleted")
+            continue
+
+        try:
+            tw_call = client.calls.create(
+                to=patient.phone,
+                from_=TWILIO_NUMBER,
+                url=(
+                    f'{BASE_URL}/llm-voice?lang={patient.language}'
+                    f'&name={quote(patient.nickname or patient.name)}'
+                    f'&batch={patient.batch or "basic"}'
+                    f'&to_phone={quote(patient.phone)}'
+                    f'&from_phone={quote(TWILIO_NUMBER)}'
+                ),
+                record=True,
+                recording_channels='dual',
+                recording_status_callback=f'{BASE_URL}/llm-recording-callback',
+                recording_status_callback_method='POST',
+            )
+
+            call_record = Call(
+                callSid=tw_call.sid,
+                recordSid=None,
+                questionId=0,
+                recordingUrl=None,
+                conversationText='[]',
+                patientPhone=patient.phone,
+                carrierPhone=TWILIO_NUMBER,
+                questionsFile=f"questions_{patient.batch or 'basic'}_{patient.language}.json",
+            )
+            snapshot_patient_to_call(call_record, patient)
+            db.session.add(call_record)
+
+            sched.last_run_at = now
+            db.session.commit()
+            print(f"[scheduler] fired LLM call for patient {patient.id} ({patient.phone}) — SID {tw_call.sid}")
+            fired += 1
+        except Exception as e:
+            db.session.rollback()
+            print(f"[scheduler] FAILED for patient {patient.id}: {e}")
+
+    print(f"[scheduler] done — fired {fired} call(s)")
+
+
+@manager.command
 def delete_today_calls():
     """Delete all Call rows created today."""
     from automated_survey_flask.models import Call

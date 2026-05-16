@@ -330,6 +330,11 @@ def llm_voice_survey():
                 carrierPhone=from_phone,
                 questionsFile=f"questions_{batch}_{lang}.json",
             )
+            # If we can find the patient by phone, snapshot demographic fields.
+            patient = Patient.query.filter_by(phone=to_phone, deleted=False).first() if to_phone else None
+            if patient:
+                from automated_survey_flask.therapist_view import snapshot_patient_to_call
+                snapshot_patient_to_call(call_record, patient)
             db.session.add(call_record)
             db.session.commit()
 
@@ -565,6 +570,9 @@ def patient_llm_call(id):
             carrierPhone=TWILIO_NUMBER,
             questionsFile=f"questions_{patient.batch or 'basic'}_{patient.language}.json",
         )
+        # Snapshot demographic+context fields so the export reflects what was true at call time.
+        from automated_survey_flask.therapist_view import snapshot_patient_to_call
+        snapshot_patient_to_call(call_record, patient)
         db.session.add(call_record)
         db.session.commit()
 

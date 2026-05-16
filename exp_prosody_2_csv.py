@@ -21,6 +21,13 @@ with app.app_context():
     # 3. Combine with original data (dropping the raw JSON column)
     df_final = pd.concat([df.drop('prosody_results', axis=1), df_json], axis=1)
 
+    # 3b. Serialize patient_utm_params JSON back to a single "k1=v1,k2=v2" string column
+    if 'patient_utm_params' in df_final.columns:
+        def _utm_to_str(x):
+            d = x if isinstance(x, dict) else (json.loads(x) if x else {})
+            return ','.join(f'{k}={v}' for k, v in d.items())
+        df_final['patient_utm_params'] = df_final['patient_utm_params'].apply(_utm_to_str)
+
     # 4. Export to CSV
     filename = "prosody_report.csv"
     filepath = os.path.join(EXPORT_DIR, filename)

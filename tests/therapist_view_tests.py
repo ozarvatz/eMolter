@@ -1,6 +1,7 @@
 from tests.base import BaseTest
 from automated_survey_flask.models import User, Patient
 from automated_survey_flask import db
+from automated_survey_flask.therapist_view import _parse_utm_string, _format_utm_dict
 
 
 class TherapistViewTest(BaseTest):
@@ -116,6 +117,24 @@ class TherapistViewTest(BaseTest):
         response = self.client.get(f'/patients/{other_patient.id}/edit')
         self.assertEqual(response.status_code, 403)
 
+    def test_create_patient_with_utm_params(self):
+        response = self.client.post('/patients/new', data={
+            'name': 'UTM Patient',
+            'phone': '+972509998888',
+            'batch': 'basic',
+            'language': 'he-IL',
+            'utm_params': 'utm_source=google,utm_medium=cpc,campaign_id=42',
+        }, follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        patient = Patient.query.filter_by(phone='+972509998888').first()
+        self.assertIsNotNone(patient)
+        self.assertEqual(patient.utm_params, {
+            'utm_source': 'google',
+            'utm_medium': 'cpc',
+            'campaign_id': '42',
+        })
+
     def test_soft_delete_patient(self):
         patient = Patient(
             name='Test Patient',
@@ -138,3 +157,36 @@ class TherapistViewTest(BaseTest):
         # Should not appear in active query
         active_patient = Patient.active().filter_by(id=patient_id).first()
         self.assertIsNone(active_patient)
+
+
+class UtmHelpersTest(BaseTest):
+    def test_parse_basic(self):
+        self.assertEqual(
+            _parse_utm_string('utm_source=google,utm_medium=cpc'),
+            {'utm_source': 'google', 'utm_medium': 'cpc'},
+        )
+
+    def test_parse_tolerates_whitespace(self):
+        self.assertEqual(
+            _parse_utm_string(' utm_source = google , foo = bar '),
+            {'utm_source': 'google', 'foo': 'bar'},
+        )
+
+    def test_parse_empty_and_none(self):
+        self.assertEqual(_parse_utm_string(''), {})
+        self.assertEqual(_parse_utm_string(None), {})
+
+    def test_parse_skips_junk_pairs(self):
+        # "bogus" has no "=", "=2" has no key
+        self.assertEqual(
+            _parse_utm_string('a=1,bogus,=2,c=3'),
+            {'a': '1', 'c': '3'},
+        )
+
+    def test_format_roundtrip(self):
+        d = {'utm_source': 'google', 'utm_medium': 'cpc'}
+        self.assertEqual(_parse_utm_string(_format_utm_dict(d)), d)
+
+    def test_format_empty(self):
+        self.assertEqual(_format_utm_dict(None), '')
+        self.assertEqual(_format_utm_dict({}), '')

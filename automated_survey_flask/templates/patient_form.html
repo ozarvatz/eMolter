@@ -27,6 +27,37 @@
     </div>
 
     <div class="form-group">
+        <label for="gender">Gender</label>
+        <select class="form-control" id="gender" name="gender">
+            <option value="">-- not specified --</option>
+            {% for g in gender_choices %}
+                <option value="{{ g }}" {{ 'selected' if patient and patient.gender == g else '' }}>{{ g|capitalize }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="birth_year">Birth Year</label>
+        <input type="number" class="form-control" id="birth_year" name="birth_year"
+               min="1900" max="2030" placeholder="e.g. 1985"
+               value="{{ patient.birth_year if patient and patient.birth_year else '' }}">
+    </div>
+
+    <div class="form-group">
+        <label for="treatment">Treatment</label>
+        <input type="text" class="form-control" id="treatment" name="treatment"
+               list="treatment_options"
+               value="{{ patient.treatment if patient and patient.treatment else '' }}"
+               placeholder="Free text or pick from list">
+        <datalist id="treatment_options">
+            {% for t in treatment_suggestions %}
+                <option value="{{ t }}"></option>
+            {% endfor %}
+        </datalist>
+        <p class="text-muted small">Your patients' treatments appear first; others are also suggested.</p>
+    </div>
+
+    <div class="form-group">
         <label for="batch">Batch</label>
         {% if batches %}
         <select class="form-control" id="batch" name="batch">
@@ -50,7 +81,63 @@
         </select>
     </div>
 
+    <div class="form-group">
+        <label for="utm_params">UTM Parameters</label>
+        <input type="text" class="form-control" id="utm_params" name="utm_params"
+               value="{{ utm_params_str }}"
+               placeholder="utm_source=google,utm_medium=cpc,utm_campaign=spring2026">
+        <p class="text-muted small">
+            Comma-separated <code>key=value</code> pairs. Any keys are allowed.
+            Stored as JSON so each key is individually searchable.
+        </p>
+    </div>
+
     <button type="submit" class="btn btn-primary">{{ 'Update' if patient else 'Create' }} Patient</button>
     <a href="{{ url_for('patient_list') }}" class="btn btn-default">Cancel</a>
 </form>
+
+{% if patient %}
+<hr>
+<h2>Automated Calls</h2>
+{% set schedule = patient.schedules|first if patient.schedules else None %}
+<form method="POST" action="{{ url_for('patient_schedule_save', id=patient.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+    <div class="form-group">
+        <label for="frequency">Frequency</label>
+        <select class="form-control" id="frequency" name="frequency">
+            {% for f in frequency_choices %}
+                <option value="{{ f }}" {{ 'selected' if schedule and schedule.frequency == f else '' }}>{{ f|capitalize }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="hour">Hour of day (0-23, local server time)</label>
+        <select class="form-control" id="hour" name="hour">
+            {% for h in range(24) %}
+                <option value="{{ h }}" {{ 'selected' if schedule and schedule.hour == h else '' }}>{{ '%02d:00' % h }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="checkbox">
+        <label>
+            <input type="checkbox" name="schedule_active" {{ 'checked' if (schedule and schedule.active) or not schedule else '' }}>
+            Active
+        </label>
+    </div>
+
+    {% if schedule and schedule.last_run_at %}
+        <p class="text-muted small">Last run: {{ schedule.last_run_at.strftime('%Y-%m-%d %H:%M') }}</p>
+    {% endif %}
+
+    <button type="submit" class="btn btn-primary">Save Schedule</button>
+    {% if schedule %}
+        <button type="submit" class="btn btn-danger"
+                formaction="{{ url_for('patient_schedule_delete', id=patient.id) }}"
+                onclick="return confirm('Remove the schedule?');">Delete Schedule</button>
+    {% endif %}
+</form>
+{% endif %}
 {% endblock %}
