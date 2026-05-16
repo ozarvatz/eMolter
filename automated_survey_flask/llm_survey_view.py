@@ -44,7 +44,29 @@ THANKS        = 3
 HELLO         = 4
 VOICE_ALGO    = 1
 
-LLM_MODEL         = os.environ.get('GROQ_MODEL', 'llama-3.1-8b-instant')
+"""
+┌─────────────────────────────────────┬────────────┬─────────────┐
+  │                Model                │ Input $/1M │ Output $/1M │
+  ├─────────────────────────────────────┼────────────┼─────────────┤
+  │ llama-3.1-8b-instant (your current) │ ~$0.05     │ ~$0.08      │
+  ├─────────────────────────────────────┼────────────┼─────────────┤
+  │ llama-3.3-70b-versatile             │ ~$0.59     │ ~$0.79      │
+  ├─────────────────────────────────────┼────────────┼─────────────┤
+  │ llama-4-scout-17b-16e-instruct      │ ~$0.11     │ ~$0.34      │
+  ├─────────────────────────────────────┼────────────┼─────────────┤
+  │ llama-4-maverick-17b-128e-instruct  │ ~$0.20     │ ~$0.60      │
+  └─────────────────────────────────────┴────────────┴─────────────┘
+
+  What it means for your app: a typical 5-question survey call uses roughly 5K input + 500 output tokens across all LLM turns. So per
+   call:
+
+  - Current (8b): ~$0.0003 → about $0.30 per 1,000 calls
+  - llama-3.3-70b: ~$0.0034 → about $3.40 per 1,000 calls
+  - llama-4-scout: ~$0.00073 → about $0.73 per 1,000 calls
+  - llama-4-maverick: ~$0.0013 → about $1.30 per 1,000 calls
+
+"""
+LLM_MODEL         = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
 MAX_HISTORY_CHARS = 3000
 TWILIO_NUMBER     = "+17473023043"
 BASE_URL          = "https://www.emolter.org:5000"
@@ -181,11 +203,28 @@ def _truncate_history(history):
 # ---------------------------------------------------------------------------
 # LLM call
 # ---------------------------------------------------------------------------
-def _build_llm_messages(lang, batch, history, q_num, max_questions):
+def _normalize_gender(g):
+    """Map Patient.gender (male/female/other/None) to the value the prompt expects.
+    Anything other than 'female' is treated as 'male' — Hebrew has only two grammatical
+    genders, and 'male' is the default form."""
+    return 'female' if (g or '').lower() == 'female' else 'male'
+
+
+def _call_gender(call_sid):
+    """Look up the patient_gender snapshot from the Call row. Defaults to 'male'."""
+    if not call_sid:
+        return 'male'
+    call = Call.query.filter_by(call_sid=call_sid, question_id=0).first()
+    return _normalize_gender(call.patient_gender if call else None)
+
+
+def _build_llm_messages(lang, batch, history, q_num, max_questions, gender):
     """Build (system_prompt, user_content) for Groq from the active LlmPrompt row for `lang`.
 
     Templates support these placeholders (Python str.format):
-      {lang}, {numbered}, {q_num}, {max_questions}, {history_lines}, {last_answer}
+      {lang}, {numbered}, {q_num}, {max_questions}, {history_lines}, {last_answer}, {gender}
+
+    `gender` is 'female' or 'male' (normalized by _normalize_gender).
 
     Raises RuntimeError if no active LlmPrompt exists for the language —
     we never silently fall back; configure one at /admin/prompts.
@@ -209,6 +248,12 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions):
 
     last_answer = history[-1]['a'] if history and history[-1].get('a') else ''
 
+    # Hebrew prompts expect זכר / נקבה; other languages keep male/female.
+    if lang == 'he-IL':
+        gender_word = 'נקבה' if gender == 'female' else 'זכר'
+    else:
+        gender_word = gender
+
     variables = {
         'lang': lang,
         'numbered': numbered,
@@ -216,6 +261,7 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions):
         'max_questions': max_questions,
         'history_lines': history_lines,
         'last_answer': last_answer,
+        'gender': gender_word,
     }
 
     system_prompt = prompt.system_template.format(**variables)
@@ -224,9 +270,9 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions):
     return system_prompt, user_content
 
 
-def _ask_llm(lang, batch, history, q_num, max_questions):
+def _ask_llm(lang, batch, history, q_num, max_questions, gender):
     """Ask Groq to generate the next survey question (synchronous)."""
-    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions)
+    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions, gender)
 
     client = _get_groq_client()
     t0 = time.time()
@@ -267,9 +313,9 @@ def _ask_llm(lang, batch, history, q_num, max_questions):
 #    - שאלה {q_num} מתוך {max_questions}."
 
 
-def ask_llm_stream(lang, batch, history, q_num, max_questions):
+def ask_llm_stream(lang, batch, history, q_num, max_questions, gender):
     """Generator — yields text tokens from Groq for use with ConversationRelay streaming."""
-    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions)
+    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions, gender)
     client = _get_groq_client()
     t0 = time.time()
     stream = client.chat.completions.create(
@@ -407,6 +453,7 @@ def llm_handle_speech():
         return Response(str(twiml), mimetype='text/xml')
 
     next_q_num = q_num + 1
+    gender     = _call_gender(call_sid)
 
     # Fire ALL DB writes + Groq in background — single writer avoids SQLite lock
     event = threading.Event()
@@ -416,7 +463,7 @@ def llm_handle_speech():
         with app.app_context():
             try:
                 _save_history(call_sid, history_snap)           # save filled answer
-                next_q = _ask_llm(lang, batch, history_snap, next_q_num, max_questions)
+                next_q = _ask_llm(lang, batch, history_snap, next_q_num, max_questions, gender)
                 history_snap.append({"q": next_q, "a": ""})
                 _save_history(call_sid, _truncate_history(history_snap))  # save new question
                 _pending_questions[call_sid]["q"] = next_q
@@ -470,7 +517,8 @@ def llm_next_question():
         if not next_q:
             # Fallback: background thread failed, call Groq synchronously
             history = _load_history(call_sid)
-            next_q  = _ask_llm(lang, batch, history, q_num, max_questions)
+            gender  = _call_gender(call_sid)
+            next_q  = _ask_llm(lang, batch, history, q_num, max_questions, gender)
             history.append({"q": next_q, "a": ""})
             _save_history(call_sid, _truncate_history(history))
             print(f"[TIMING] sync fallback Groq: {(time.time()-t0)*1000:.1f}ms")

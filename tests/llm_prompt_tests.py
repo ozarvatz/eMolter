@@ -98,11 +98,11 @@ class BuildLlmMessagesTest(BaseTest):
 
     def test_raises_when_no_active_prompt(self):
         with self.assertRaises(RuntimeError):
-            _build_llm_messages('en-US', 'basic', [], 1, 5)
+            _build_llm_messages('en-US', 'basic', [], 1, 5, 'male')
 
     def test_uses_first_template_when_no_history(self):
         _make_prompt(lang='en-US')
-        system, user = _build_llm_messages('en-US', 'basic', [], 1, 5)
+        system, user = _build_llm_messages('en-US', 'basic', [], 1, 5, 'male')
         self.assertIn('You are a survey bot for en-US', system)
         self.assertIn('Topics:', system)
         self.assertEqual(user, 'Start the survey, question 1.')
@@ -110,13 +110,13 @@ class BuildLlmMessagesTest(BaseTest):
     def test_uses_followup_template_when_history_present(self):
         _make_prompt(lang='en-US')
         history = [{'q': 'How are you?', 'a': 'Tired.'}]
-        system, user = _build_llm_messages('en-US', 'basic', history, 2, 5)
+        system, user = _build_llm_messages('en-US', 'basic', history, 2, 5, 'male')
         self.assertIn('Patient just said: "Tired."', user)
         self.assertIn('Ask question 2 of 5', user)
 
     def test_substitutes_placeholders(self):
         _make_prompt(lang='en-US')
-        system, _ = _build_llm_messages('en-US', 'basic', [], 3, 7)
+        system, _ = _build_llm_messages('en-US', 'basic', [], 3, 7, 'male')
         self.assertIn('question 3 of 7', system)
         self.assertIn('How are you feeling?', system)  # came from QuestionSet via {numbered}
 
@@ -124,13 +124,26 @@ class BuildLlmMessagesTest(BaseTest):
         # History exists but last entry has empty answer — treated as first turn
         _make_prompt(lang='en-US')
         history = [{'q': 'Hello', 'a': ''}]
-        _, user = _build_llm_messages('en-US', 'basic', history, 1, 5)
+        _, user = _build_llm_messages('en-US', 'basic', history, 1, 5, 'male')
         self.assertEqual(user, 'Start the survey, question 1.')
 
     def test_inactive_prompt_not_used(self):
         _make_prompt(lang='en-US', active=False, system='OLD')
         with self.assertRaises(RuntimeError):
-            _build_llm_messages('en-US', 'basic', [], 1, 5)
+            _build_llm_messages('en-US', 'basic', [], 1, 5, 'male')
+
+    def test_gender_kept_english_for_non_hebrew(self):
+        _make_prompt(lang='en-US', system='Gender: {gender}.')
+        system, _ = _build_llm_messages('en-US', 'basic', [], 1, 5, 'female')
+        self.assertIn('Gender: female.', system)
+
+    def test_gender_translated_to_hebrew_for_he_il(self):
+        _make_question_set(batch='basic', lang='he-IL')
+        _make_prompt(lang='he-IL', system='מין: {gender}.')
+        system_f, _ = _build_llm_messages('he-IL', 'basic', [], 1, 5, 'female')
+        self.assertIn('מין: נקבה.', system_f)
+        system_m, _ = _build_llm_messages('he-IL', 'basic', [], 1, 5, 'male')
+        self.assertIn('מין: זכר.', system_m)
 
 
 # ---------------------------------------------------------------------------

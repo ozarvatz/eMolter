@@ -213,8 +213,10 @@ def ws_media_stream():
 
         # LLM call (Groq)
         t0 = time.time()
+        cr = state.get('call_record')
+        gender = 'female' if (cr and (cr.patient_gender or '').lower() == 'female') else 'male'
         try:
-            next_q = _ask_llm(lang, batch, history, next_q_num, max_q)
+            next_q = _ask_llm(lang, batch, history, next_q_num, max_q, gender)
         except Exception as e:
             print(f"[MS] Groq error: {e}")
             try:
