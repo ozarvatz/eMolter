@@ -54,20 +54,21 @@ BASE_URL          = "https://www.emolter.org:5000"
 # ---------------------------------------------------------------------------
 GOOGLE_TTS_API_KEY = os.environ.get('GOOGLE_TTS_API_KEY', '')
 
-_LANG_TO_VOICE = {
-    'he-IL': 'he-IL-Standard-A',
-    'de-DE': 'de-DE-Standard-A',
-    'en-US': 'en-US-Standard-B',
-}
-
 _TTS_CACHE_DIR = Path(__file__).parent / 'static' / 'tts'
 _TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _google_tts_url(text, lang='he-IL', voice_model=None):
+def _google_tts_url(text, lang, voice_model):
     """Generate (or return cached) MP3 via Google TTS REST and return public URL.
+    `voice_model` comes from QuestionSet.content.config[0].body (the "Voice Model (TTS)"
+    field in the question-set GUI), e.g. "Google.he-IL-Standard-A" or "he-IL-Standard-A".
     Caches by hash of (voice, text) so identical phrases (fillers, greetings) are reused."""
-    voice_name = (voice_model or '').replace('Google.', '') or _LANG_TO_VOICE.get(lang, 'en-US-Standard-B')
+    voice_name = (voice_model or '').replace('Google.', '').strip()
+    if not voice_name:
+        raise ValueError(
+            f"voice_model is empty for lang={lang}; set it in the question-set GUI "
+            f"(Voice Model (TTS) field)."
+        )
     key = hashlib.md5(f"{voice_name}:{text}".encode('utf-8')).hexdigest()
     fpath = _TTS_CACHE_DIR / f"{key}.mp3"
 
