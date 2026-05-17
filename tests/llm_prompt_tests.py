@@ -1,7 +1,7 @@
 from tests.base import BaseTest
 from automated_survey_flask.models import LlmPrompt, QuestionSet, User
 from automated_survey_flask import db
-from automated_survey_flask.llm_survey_view import _build_llm_messages
+from automated_survey_flask.llm_survey_view import _build_llm_messages, _vocalize_for_tts
 
 
 SAMPLE_QUESTIONS = {
@@ -266,3 +266,39 @@ class PromptAdminViewTest(BaseTest):
         updated = LlmPrompt.query.get(p.id)
         self.assertEqual(updated.system_template, 'updated system')
         self.assertTrue(updated.active)
+
+
+# ---------------------------------------------------------------------------
+# _vocalize_for_tts (Hebrew niqqud post-processor)
+# ---------------------------------------------------------------------------
+class VocalizeForTtsTest(BaseTest):
+
+    def test_noop_for_non_hebrew(self):
+        self.assertEqual(_vocalize_for_tts('How are you?', 'female', 'en-US'), 'How are you?')
+
+    def test_noop_when_gender_none(self):
+        self.assertEqual(_vocalize_for_tts('מה שלך?', None, 'he-IL'), 'מה שלך?')
+
+    def test_substitutes_feminine_form(self):
+        out = _vocalize_for_tts('איך שלומך היום?', 'female', 'he-IL')
+        self.assertIn('שְׁלוֹמֵךְ', out)
+        self.assertNotIn('שלומך', out)
+
+    def test_substitutes_masculine_form(self):
+        out = _vocalize_for_tts('איך שלומך היום?', 'male', 'he-IL')
+        self.assertIn('שְׁלוֹמְךָ', out)
+
+    def test_handles_multiple_words_in_one_sentence(self):
+        out = _vocalize_for_tts('מה שלך ומה איתך?', 'female', 'he-IL')
+        self.assertIn('שֶׁלָּךְ', out)
+        self.assertIn('אִתָּךְ', out)
+
+    def test_longer_word_wins_over_substring(self):
+        # בשבילך contains לך — ensure we match the full word, not the suffix
+        out = _vocalize_for_tts('זה בשבילך.', 'female', 'he-IL')
+        self.assertIn('בִּשְׁבִילֵךְ', out)
+        # And the masculine standalone לך isn't accidentally inserted
+        self.assertNotIn('לָךְ', out)
+
+    def test_empty_text(self):
+        self.assertEqual(_vocalize_for_tts('', 'female', 'he-IL'), '')

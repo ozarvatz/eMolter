@@ -79,12 +79,60 @@ GOOGLE_TTS_API_KEY = os.environ.get('GOOGLE_TTS_API_KEY', '')
 _TTS_CACHE_DIR = Path(__file__).parent / 'static' / 'tts'
 _TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---------------------------------------------------------------------------
+# Hebrew niqqud post-processor for TTS
+# ---------------------------------------------------------------------------
+# 2nd-person attached-pronoun suffix words: same unvocalized spelling for both
+# genders, different pronunciation. Google TTS defaults to the masculine reading
+# and gets the feminine wrong. We patch these words at the TTS boundary only —
+# never in DB history, so the LLM's own context stays clean (no niqqud drift).
+#
+# Format: plain → (masculine_vocalized, feminine_vocalized)
+_AMBIGUOUS_2P_SUFFIXES = {
+    'שלך':     ('שֶׁלְּךָ',     'שֶׁלָּךְ'),
+    'לך':      ('לְךָ',         'לָךְ'),
+    'שלומך':   ('שְׁלוֹמְךָ',    'שְׁלוֹמֵךְ'),
+    'איתך':    ('אִתְּךָ',       'אִתָּךְ'),
+    'אתך':     ('אִתְּךָ',       'אִתָּךְ'),
+    'ממך':     ('מִמְּךָ',       'מִמֵּךְ'),
+    'עליך':    ('עָלֶיךָ',      'עָלַיִךְ'),
+    'אצלך':    ('אֶצְלְךָ',      'אֶצְלֵךְ'),
+    'בשבילך':  ('בִּשְׁבִילְךָ',  'בִּשְׁבִילֵךְ'),
+    'בך':      ('בְּךָ',        'בָּךְ'),
+    'אליך':    ('אֵלֶיךָ',      'אֵלַיִךְ'),
+    'מולך':    ('מוּלְךָ',       'מוּלֵךְ'),
+    'לפניך':   ('לְפָנֶיךָ',     'לְפָנַיִךְ'),
+    'אחריך':   ('אַחֲרֶיךָ',     'אַחֲרַיִךְ'),
+    'בעצמך':   ('בְּעַצְמְךָ',   'בְּעַצְמֵךְ'),
+    'בעיניך':  ('בְּעֵינֶיךָ',   'בְּעֵינַיִךְ'),
+    'תחתיך':   ('תַּחְתֶּיךָ',   'תַּחְתַּיִךְ'),
+}
 
-def _google_tts_url(text, lang, voice_model):
+import re as _re
+# Longest first so e.g. בשבילך beats לך in alternation.
+_AMBIGUOUS_2P_RE = _re.compile(
+    r'\b(' + '|'.join(_re.escape(k) for k in sorted(_AMBIGUOUS_2P_SUFFIXES, key=len, reverse=True)) + r')\b'
+)
+
+
+def _vocalize_for_tts(text, gender, lang):
+    """Add niqqud to gender-ambiguous 2nd-person suffix words for Hebrew TTS.
+    No-op for non-Hebrew or when `gender` is None. Plain text in / vocalized out;
+    the result is only ever passed to TTS, never written back to DB history."""
+    if lang != 'he-IL' or not gender or not text:
+        return text
+    idx = 1 if gender == 'female' else 0
+    return _AMBIGUOUS_2P_RE.sub(lambda m: _AMBIGUOUS_2P_SUFFIXES[m.group(1)][idx], text)
+
+
+def _google_tts_url(text, lang, voice_model, gender=None):
     """Generate (or return cached) MP3 via Google TTS REST and return public URL.
     `voice_model` comes from QuestionSet.content.config[0].body (the "Voice Model (TTS)"
     field in the question-set GUI), e.g. "Google.he-IL-Standard-A" or "he-IL-Standard-A".
+    `gender` is 'male'/'female' (optional) — when set and lang is he-IL, ambiguous
+    2nd-person suffix words get patched with niqqud so TTS pronounces them correctly.
     Caches by hash of (voice, text) so identical phrases (fillers, greetings) are reused."""
+    text = _vocalize_for_tts(text, gender, lang)
     voice_name = (voice_model or '').replace('Google.', '').strip()
     if not voice_name:
         raise ValueError(
@@ -392,6 +440,9 @@ def llm_voice_survey():
             )
             db.session.commit()
 
+        # Read gender after Call upsert so the snapshot is visible.
+        gender = _call_gender(call_sid)
+
         # 1-second pause absorbs the patient's pickup "hello" before Gather starts.
         twiml.pause(length=1)
         gather = Gather(
@@ -405,16 +456,20 @@ def llm_voice_survey():
             ),
             method='POST',
         )
-        gather.play(_google_tts_url(intro_q, lang, voice_model))
+        gather.play(_google_tts_url(intro_q, lang, voice_model, gender))
         twiml.append(gather)
-        twiml.play(_google_tts_url(sorry, lang, voice_model))
+        twiml.play(_google_tts_url(sorry, lang, voice_model, gender))
         twiml.hangup()
 
     except Exception as e:
         import traceback
         print(f"Error in llm_voice_survey: {e}")
         traceback.print_exc()
-        twiml.play(_google_tts_url("Sorry, there was a technical error.", lang))
+        try:
+            sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
+            twiml.play(_google_tts_url(sorry, lang, voice_model, _call_gender(call_sid)))
+        except Exception as ee:
+            print(f"[ERROR] could not play sorry from DB: {ee}")
         twiml.hangup()
 
     return Response(str(twiml), mimetype='text/xml')
@@ -435,6 +490,7 @@ def llm_handle_speech():
     print(f"SpeechResult: {speech_result}")
 
     voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
+    gender      = _call_gender(call_sid)
     twiml       = VoiceResponse()
 
     # Load history in main thread (read only — no writes here to avoid SQLite lock)
@@ -447,13 +503,12 @@ def llm_handle_speech():
     if q_num >= max_questions:
         _save_history(call_sid, history)
         thanks = _read_from_json(lang, batch, THANKS, "messages")
-        twiml.play(_google_tts_url(thanks, lang, voice_model))
+        twiml.play(_google_tts_url(thanks, lang, voice_model, gender))
         twiml.hangup()
         print(f"[TIMING] llm_handle_speech total (survey done): {(time.time()-t_request)*1000:.1f}ms")
         return Response(str(twiml), mimetype='text/xml')
 
     next_q_num = q_num + 1
-    gender     = _call_gender(call_sid)
 
     # Fire ALL DB writes + Groq in background — single writer avoids SQLite lock
     event = threading.Event()
@@ -477,7 +532,7 @@ def llm_handle_speech():
 
     # Respond immediately — filler buys ~500ms while Groq runs in background
     filler = _get_filler(lang)
-    twiml.play(_google_tts_url(filler, lang, voice_model))
+    twiml.play(_google_tts_url(filler, lang, voice_model, gender))
     twiml.redirect(
         f'/llm-next-question?q_num={next_q_num}&lang={lang}'
         f'&name={quote(patient_name)}&batch={batch}&max_q={max_questions}',
@@ -502,6 +557,7 @@ def llm_next_question():
 
     try:
         voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
+        gender      = _call_gender(call_sid)
         twiml       = VoiceResponse()
 
         # Wait for background Groq result (should already be done — filler took ~500ms)
@@ -517,7 +573,6 @@ def llm_next_question():
         if not next_q:
             # Fallback: background thread failed, call Groq synchronously
             history = _load_history(call_sid)
-            gender  = _call_gender(call_sid)
             next_q  = _ask_llm(lang, batch, history, q_num, max_questions, gender)
             history.append({"q": next_q, "a": ""})
             _save_history(call_sid, _truncate_history(history))
@@ -534,11 +589,11 @@ def llm_next_question():
             ),
             method='POST',
         )
-        gather.play(_google_tts_url(next_q, lang, voice_model))
+        gather.play(_google_tts_url(next_q, lang, voice_model, gender))
         twiml.append(gather)
 
         sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
-        twiml.play(_google_tts_url(sorry, lang, voice_model))
+        twiml.play(_google_tts_url(sorry, lang, voice_model, gender))
         twiml.hangup()
 
     except Exception as e:
@@ -547,10 +602,11 @@ def llm_next_question():
         traceback.print_exc()
         twiml = VoiceResponse()
         try:
-            sorry = _read_from_json(lang, batch, SORRY_FAILED, "messages")
-        except Exception:
-            sorry = "מצטערים, אירעה שגיאה."
-        twiml.play(_google_tts_url(sorry, lang))
+            sorry       = _read_from_json(lang, batch, SORRY_FAILED, "messages")
+            voice_model = _read_from_json(lang, batch, VOICE_ALGO, "config")
+            twiml.play(_google_tts_url(sorry, lang, voice_model, _call_gender(call_sid)))
+        except Exception as ee:
+            print(f"[ERROR] could not play sorry from DB: {ee}")
         twiml.hangup()
 
     print(f"[TIMING] llm_next_question total: {(time.time()-t0)*1000:.1f}ms")

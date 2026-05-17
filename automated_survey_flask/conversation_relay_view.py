@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover — tests mock these
 from . import app
 from .models import db, Call, Patient
 from .llm_survey_view import (
-    _ask_llm, _get_filler, THANKS, HELLO, VOICE_ALGO, SORRY_FAILED,
+    _ask_llm, _get_filler, _vocalize_for_tts, THANKS, HELLO, VOICE_ALGO, SORRY_FAILED,
 )
 
 TWILIO_NUMBER      = "+17473023043"
@@ -56,8 +56,11 @@ def _get_base_questions(lang, batch):
     return get_questions_list(lang, batch)
 
 
-def _tts(text, lang='he-IL'):
-    """Generate mulaw 8kHz audio bytes via Google Cloud TTS REST API."""
+def _tts(text, lang='he-IL', gender=None):
+    """Generate mulaw 8kHz audio bytes via Google Cloud TTS REST API.
+    `gender` is 'male'/'female' — when set with lang='he-IL', gender-ambiguous
+    2nd-person suffix words get vocalized so TTS pronounces them correctly."""
+    text = _vocalize_for_tts(text, gender, lang)
     voice_name = _LANG_TO_VOICE.get(lang, 'en-US-Standard-B')
     url = (
         f"https://texttospeech.googleapis.com/v1/text:synthesize"
@@ -173,8 +176,10 @@ def ws_media_stream():
         if history and history[-1].get('a') == '':
             history[-1]['a'] = transcript or '[no answer]'
 
+        cr     = state.get('call_record')
+        gender = 'female' if (cr and (cr.patient_gender or '').lower() == 'female') else 'male'
+
         def _save():
-            cr = state['call_record']
             if cr:
                 cr.conversation_text = json.dumps(history, ensure_ascii=False)
                 db.session.commit()
@@ -184,7 +189,7 @@ def ws_media_stream():
             state['bot_speaking'] = True
             try:
                 thanks = _read(lang, batch, THANKS, "messages")
-                thanks_audio = _tts(thanks, lang)
+                thanks_audio = _tts(thanks, lang, gender)
                 _save()
                 send_audio(thanks_audio)
                 # Pause so Twilio plays the goodbye before we close
@@ -206,15 +211,13 @@ def ws_media_stream():
 
         # Pre-cached filler plays immediately
         try:
-            filler_audio = _tts(_get_filler(lang), lang)
+            filler_audio = _tts(_get_filler(lang), lang, gender)
             send_audio(filler_audio)
         except Exception as e:
             print(f"[MS] filler TTS error: {e}")
 
         # LLM call (Groq)
         t0 = time.time()
-        cr = state.get('call_record')
-        gender = 'female' if (cr and (cr.patient_gender or '').lower() == 'female') else 'male'
         try:
             next_q = _ask_llm(lang, batch, history, next_q_num, max_q, gender)
         except Exception as e:
@@ -231,7 +234,7 @@ def ws_media_stream():
         # TTS and send question audio
         t0 = time.time()
         try:
-            q_audio = _tts(next_q, lang)
+            q_audio = _tts(next_q, lang, gender)
             print(f"[TIMING MS] TTS: {(time.time()-t0)*1000:.1f}ms ({len(q_audio)} bytes)")
             send_audio(q_audio)
         except Exception as e:
@@ -328,7 +331,8 @@ def ws_media_stream():
                     db.session.commit()
                     state['q_num'] = 1
 
-                    greeting_audio = _tts(greeting, lang)
+                    gender = 'female' if (call_record.patient_gender or '').lower() == 'female' else 'male'
+                    greeting_audio = _tts(greeting, lang, gender)
                     send_audio(greeting_audio)
                 except Exception as e:
                     print(f"[MS] greeting error: {e}")
