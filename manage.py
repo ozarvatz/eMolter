@@ -94,15 +94,21 @@ def seed_prosody_params():
     parameters = [
         # Basic Voice Metrics
         ('mean_pitch_hz', 'Mean Pitch', 'Average fundamental frequency of voice in Hertz. Normal ranges: Male (85-180 Hz), Female (165-255 Hz). Lower values may indicate depression or fatigue.', 'basic'),
+        ('pitch_sd_hz', 'Pitch SD (Hz)', 'Top-level standard deviation of pitch across the utterance in Hertz. High SD = expressive/emotional speech; very low SD = monotone (possible depression marker).', 'basic'),
+        ('pitch_range_hz', 'Pitch Range (Hz)', 'Distance between lowest and highest pitch in Hertz. Compressed range may indicate flat affect; very wide range can reflect agitation or strong emotion.', 'basic'),
         ('mean_intensity_db', 'Mean Intensity', 'Average loudness of voice in decibels. Indicates vocal energy and projection. Low intensity may suggest low energy or depression.', 'basic'),
         ('mean_hnr_db', 'Mean HNR', 'Harmonics-to-Noise Ratio in decibels. Measures voice quality and clarity. Values >15 dB indicate good voice quality, <10 dB may indicate hoarseness or voice disorders.', 'basic'),
         ('f1_mean_hz', 'Formant F1', 'First formant frequency in Hertz. Related to tongue height and jaw opening. Affects vowel quality and speech clarity.', 'basic'),
         ('f2_mean_hz', 'Formant F2', 'Second formant frequency in Hertz. Related to tongue position (front/back). Important for vowel distinction and speech intelligibility.', 'basic'),
+        ('voice_health_score', 'Voice Health Score', 'Weighted composite score from 0.0 (clean) to 1.0 (very hoarse). Combines jitter, shimmer, HNR and degree_of_voice_breaks into a single severity indicator.', 'basic'),
+        ('speaking_ratio', 'Speaking Ratio', 'Fraction (0-1) of the recording containing active speech vs silence. Very low values indicate long pauses, reluctance, or interviewer-dominated audio.', 'basic'),
+        ('total_duration', 'Total Duration (s)', 'Length of the analyzed recording in seconds. Longer samples yield more reliable statistics; very short samples should be interpreted with caution.', 'basic'),
 
         # Voice Quality Statistics
         ('from_0_to_0_seconds_duration', 'Duration', 'Total duration of the voice sample in seconds. Longer samples provide more reliable analysis.', 'quality'),
         ('number_of_pulses', 'Number of Pulses', 'Total number of glottal pulses detected. Indicates the regularity of vocal fold vibration.', 'quality'),
         ('median_pitch', 'Median Pitch', 'Middle value of pitch distribution in Hertz. More robust than mean pitch against outliers.', 'quality'),
+        ('mean_pitch', 'Mean Pitch (VQS)', 'Praat-reported mean fundamental frequency in voice_quality_stats, in Hertz. Closely tracks mean_pitch_hz but is computed from the voice report rather than the pitch object.', 'quality'),
         ('standard_deviation', 'Pitch Std Dev', 'Standard deviation of pitch in Hertz. Measures pitch variability. High values may indicate emotional expressiveness or instability.', 'quality'),
         ('minimum_pitch', 'Min Pitch', 'Lowest pitch detected in Hertz. Part of the pitch range measurement.', 'quality'),
         ('maximum_pitch', 'Max Pitch', 'Highest pitch detected in Hertz. Part of the pitch range measurement.', 'quality'),
@@ -111,6 +117,7 @@ def seed_prosody_params():
 
         # Jitter (Voice Stability)
         ('jitter_local', 'Jitter Local', 'Cycle-to-cycle variation in pitch period (%). Measures short-term pitch instability. Normal <1%, values >2% may indicate voice pathology or stress.', 'jitter'),
+        ('jitter_local,_absolute', 'Jitter Local (Absolute)', 'Absolute cycle-to-cycle variation of the pitch period in microseconds. Unlike jitter_local (a percentage), this is an absolute time-domain measure of period instability.', 'jitter'),
         ('jitter_rap', 'Jitter RAP', 'Relative Average Perturbation - three-point smoothed jitter (%). Measures pitch perturbation. Values >0.68% may be abnormal.', 'jitter'),
         ('jitter_ppq5', 'Jitter PPQ5', 'Five-point Period Perturbation Quotient (%). Smoothed jitter measure. Values >0.84% may indicate voice issues.', 'jitter'),
         ('jitter_ddp', 'Jitter DDP', 'Difference of Differences of Periods (%). Alternative jitter calculation. Three times the RAP value.', 'jitter'),

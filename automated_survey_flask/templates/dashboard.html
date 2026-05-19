@@ -50,11 +50,12 @@
                     <th>Patient</th>
                     <th>Question ID</th>
                     <th>Status</th>
+                    <th>Length (s)</th>
                     <th>Pitch (Hz)</th>
                     <th>Voice Quality (HNR)</th>
                     <th>Shimmer (%)</th>
                     <th>Jitter (%)</th>
-                    <th>Top Emotion</th>
+                    <th>Voice Breaks (%)</th>
                 </tr>
             </thead>
             <tbody>
@@ -73,6 +74,17 @@
                             </a>
                         {% else %}
                             <span class="label label-warning">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if call.is_processed and call.prosody_results %}
+                            {% set dur = call.prosody_results.get('total_duration') %}
+                            {% if dur is none and call.prosody_results.get('voice_quality_stats') %}
+                                {% set dur = call.prosody_results['voice_quality_stats'].get('from_0_to_0_seconds_duration') %}
+                            {% endif %}
+                            {{ "%.1f"|format(dur) if dur is not none else '-' }}
+                        {% else %}
+                            <span class="text-muted">-</span>
                         {% endif %}
                     </td>
                     <td>
@@ -125,18 +137,15 @@
                         {% endif %}
                     </td>
                     <td>
-                        {% if call.is_processed and call.prosody_results and call.prosody_results.get('sentiment') %}
-                            {% set sentiment = call.prosody_results['sentiment'] %}
-                            {% set top = namespace(label='', score=0) %}
-                            {% for label, score in sentiment.items() %}
-                                {% if score > top.score %}
-                                    {% set top.label = label %}
-                                    {% set top.score = score %}
-                                {% endif %}
-                            {% endfor %}
-                            <span class="{% if top.label == 'happiness' %}text-success{% elif top.label in ['anger', 'disgust'] %}text-danger{% elif top.label in ['sadness', 'fear'] %}text-warning{% endif %}">
-                                {{ top.label|capitalize }} ({{ "%.0f"|format(top.score * 100) }}%)
-                            </span>
+                        {% if call.is_processed and call.prosody_results and call.prosody_results.get('voice_quality_stats') %}
+                            {% set dvb = call.prosody_results['voice_quality_stats'].get('degree_of_voice_breaks') %}
+                            {% if dvb is not none %}
+                                <span class="{% if dvb < 10 %}text-success{% elif dvb < 30 %}text-warning{% else %}text-danger{% endif %}">
+                                    {{ "%.1f"|format(dvb) }}%
+                                </span>
+                            {% else %}
+                                -
+                            {% endif %}
                         {% else %}
                             <span class="text-muted">-</span>
                         {% endif %}
@@ -186,9 +195,9 @@
                 Jitter: <span class="text-success">Good (&lt;1%)</span>,
                 <span class="text-warning">Fair (1-2%)</span>,
                 <span class="text-danger">Poor (&gt;2%)</span> |
-                Emotion: <span class="text-success">Happiness</span>,
-                <span class="text-warning">Sadness / Fear</span>,
-                <span class="text-danger">Anger / Disgust</span> |
+                Voice Breaks: <span class="text-success">Good (&lt;10%)</span>,
+                <span class="text-warning">Fair (10-30%)</span>,
+                <span class="text-danger">Poor (&gt;30%)</span> |
                 Click "Processed" to view all prosody details
             </small>
         </div>
