@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block title %}Patient Report - {{ patient.nickname or patient.name }}{% endblock %}
+
+{% block content %}
+<a href="{{ url_for('patient_list') }}" class="btn btn-default btn-sm" style="margin-bottom: 10px;">
+    &larr; Back to patients
+</a>
+
+<div class="panel panel-primary">
+    <div class="panel-heading">
+        <h3 class="panel-title">
+            <strong id="patientName">{{ patient.nickname or patient.name }}</strong>
+            <span class="text-muted" style="font-weight: normal;">
+                — <span id="patientMeta">{{ patient.treatment or 'no treatment' }} · {{ patient.gender or '?' }}</span>
+                <span id="patientCallCount"></span>
+            </span>
+        </h3>
+    </div>
+    <div class="panel-body">
+        <!-- 30-second summary banner: one badge per metric -->
+        <div class="row" id="summaryBanner">
+            <div class="col-md-4">
+                <div id="summary_pitch" class="alert alert-info" style="margin-bottom: 0;">
+                    <strong>Pitch:</strong> <span class="msg">loading…</span>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div id="summary_length" class="alert alert-info" style="margin-bottom: 0;">
+                    <strong>Length:</strong> <span class="msg">loading…</span>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div id="summary_voice_breaks" class="alert alert-info" style="margin-bottom: 0;">
+                    <strong>Voice Breaks:</strong> <span class="msg">loading…</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Controls -->
+<div class="well well-sm">
+    <form id="reportControls" class="form-inline" onsubmit="return false;">
+        <div class="form-group" style="margin-right: 25px;">
+            <label for="windowInput">Baseline window (last N calls):</label>
+            <input id="windowInput" type="range" min="2" max="100" value="30"
+                   style="vertical-align: middle; width: 200px;" />
+            <span id="windowValue" style="display: inline-block; min-width: 30px; font-weight: bold;">30</span>
+        </div>
+        <div class="form-group" style="margin-right: 25px;">
+            <label for="thresholdInput">Threshold (±k · STD):</label>
+            <input id="thresholdInput" type="range" min="0.5" max="5" step="0.1" value="2.0"
+                   style="vertical-align: middle; width: 200px;" />
+            <span id="thresholdValue" style="display: inline-block; min-width: 30px; font-weight: bold;">2.0</span>
+        </div>
+        <span class="text-muted" id="loadingIndicator" style="display:none;">
+            <span class="glyphicon glyphicon-refresh spinning"></span> updating…
+        </span>
+    </form>
+</div>
+
+<!-- Charts -->
+<div class="panel panel-default">
+    <div class="panel-heading"><strong>Mean Pitch (Hz)</strong> <span id="stats_pitch" class="text-muted small"></span></div>
+    <div class="panel-body"><div id="chart_pitch" style="height: 280px;"></div></div>
+</div>
+<div class="panel panel-default">
+    <div class="panel-heading"><strong>Call Length (s)</strong> <span id="stats_length" class="text-muted small"></span></div>
+    <div class="panel-body"><div id="chart_length" style="height: 280px;"></div></div>
+</div>
+<div class="panel panel-default">
+    <div class="panel-heading"><strong>Voice Breaks (%)</strong> <span id="stats_voice_breaks" class="text-muted small"></span></div>
+    <div class="panel-body"><div id="chart_voice_breaks" style="height: 280px;"></div></div>
+</div>
+
+<div class="well well-sm">
+    <small>
+        <strong>How to read:</strong>
+        Each point is one processed call. The shaded band is the patient's baseline
+        (mean ±k·STD over the last N calls). Red markers fall outside that band.
+        Line color changes when the patient's <em>treatment</em>, <em>UTM source</em>,
+        or <em>gender</em> changes between calls. Hover any point to see the
+        treatment, UTM, gender, and age at that call.
+    </small>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+</style>
+<script>
+const PATIENT_ID = {{ patient.id }};
+const METRIC_KEYS = ['pitch', 'length', 'voice_breaks'];
+const METRIC_UNITS = {pitch: 'Hz', length: 's', voice_breaks: '%'};
+
+// Stable color palette for context segments.
+const SEGMENT_PALETTE = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd', '#8c564b',
+    '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#d62728'
+];
+
+function contextColorMap(contexts) {
+    const map = {};
+    let i = 0;
+    for (const c of contexts) {
+        if (!(c in map)) {
+            map[c] = SEGMENT_PALETTE[i % SEGMENT_PALETTE.length];
+            i += 1;
+        }
+    }
+    return map;
+}
+
+function buildCustomdata(d, indices) {
+    return indices.map(i => [
+        d.treatments[i] || '—',
+        d.utms[i] || '—',
+        d.genders[i] || '—',
+        d.ages[i] != null ? d.ages[i] : '—',
+    ]);
+}
+
+function renderChart(metricKey, d) {
+    const m = d.metrics[metricKey];
+    const elId = 'chart_' + metricKey;
+    const unit = METRIC_UNITS[metricKey];
+
+    if (!d.dates.length) {
+        Plotly.purge(elId);
+        document.getElementById(elId).innerHTML =
+            '<div class="text-muted" style="padding: 80px; text-align:center;">No processed calls yet.</div>';
+        return;
+    }
+
+    const colorMap = contextColorMap(d.contexts);
+    const traces = [];
+
+    // 1) Gray spine — single light line connecting all points (no hover).
+    traces.push({
+        type: 'scatter',
+        mode: 'lines',
+        x: d.dates,
+        y: m.values,
+        line: {color: '#cccccc', width: 1},
+        hoverinfo: 'skip',
+        showlegend: false,
+    });
+
+    // 2) One short line trace per adjacent pair, colored by the *destination*
+    //    point's context. This creates the "segment changes color when context
+    //    changes" effect.
+    for (let i = 0; i < d.dates.length - 1; i++) {
+        if (m.values[i] == null || m.values[i+1] == null) continue;
+        const segColor = colorMap[d.contexts[i+1]];
+        traces.push({
+            type: 'scatter',
+            mode: 'lines',
+            x: [d.dates[i], d.dates[i+1]],
+            y: [m.values[i], m.values[i+1]],
+            line: {color: segColor, width: 3},
+            hoverinfo: 'skip',
+            showlegend: false,
+        });
+    }
+
+    // 3) Markers — split into in-band vs out-of-band so we can color the
+    //    outliers red. Markers carry the rich hover.
+    const inIdx = [], outIdx = [];
+    m.values.forEach((v, i) => {
+        if (v == null) return;
+        if (m.out_of_band[i]) outIdx.push(i); else inIdx.push(i);
+    });
+
+    const hoverTpl =
+        '<b>%{x}</b><br>' +
+        m.label + ': <b>%{y:.2f} ' + unit + '</b><br>' +
+        'Treatment: %{customdata[0]}<br>' +
+        'UTM: %{customdata[1]}<br>' +
+        'Gender: %{customdata[2]}<br>' +
+        'Age: %{customdata[3]}' +
+        '<extra></extra>';
+
+    if (inIdx.length) {
+        traces.push({
+            type: 'scatter',
+            mode: 'markers',
+            x: inIdx.map(i => d.dates[i]),
+            y: inIdx.map(i => m.values[i]),
+            marker: {
+                size: 9,
+                color: inIdx.map(i => colorMap[d.contexts[i]]),
+                line: {color: '#333', width: 0.5},
+            },
+            customdata: buildCustomdata(d, inIdx),
+            hovertemplate: hoverTpl,
+            showlegend: false,
+        });
+    }
+    if (outIdx.length) {
+        traces.push({
+            type: 'scatter',
+            mode: 'markers',
+            x: outIdx.map(i => d.dates[i]),
+            y: outIdx.map(i => m.values[i]),
+            marker: {
+                size: 12,
+                color: '#d62728',
+                symbol: 'circle-open',
+                line: {color: '#d62728', width: 2.5},
+            },
+            customdata: buildCustomdata(d, outIdx),
+            hovertemplate: hoverTpl,
+            showlegend: false,
+        });
+    }
+
+    // 4) Mean + threshold band as layout shapes.
+    const shapes = [];
+    if (m.mean != null && m.threshold_low != null) {
+        shapes.push({
+            type: 'rect', xref: 'paper', yref: 'y',
+            x0: 0, x1: 1, y0: m.threshold_low, y1: m.threshold_high,
+            fillcolor: '#5cb85c', opacity: 0.10, line: {width: 0},
+            layer: 'below',
+        });
+        shapes.push({
+            type: 'line', xref: 'paper', yref: 'y',
+            x0: 0, x1: 1, y0: m.mean, y1: m.mean,
+            line: {color: '#5cb85c', width: 1.5, dash: 'dash'},
+            layer: 'below',
+        });
+    }
+
+    const layout = {
+        margin: {l: 50, r: 20, t: 10, b: 40},
+        xaxis: {type: 'category', tickangle: -30, automargin: true},
+        yaxis: {title: unit, zeroline: false},
+        shapes: shapes,
+        hovermode: 'closest',
+    };
+
+    Plotly.react(elId, traces, layout, {displayModeBar: false, responsive: true});
+
+    // Sub-heading stats text.
+    const statsEl = document.getElementById('stats_' + metricKey);
+    if (m.mean != null) {
+        statsEl.textContent =
+            '— baseline n=' + m.baseline_n + ', mean=' + m.mean.toFixed(2) +
+            ' ' + unit + ', STD=' + m.std.toFixed(2) +
+            ', band=[' + m.threshold_low.toFixed(2) + ', ' + m.threshold_high.toFixed(2) + ']';
+    } else {
+        statsEl.textContent = '— no numeric data';
+    }
+}
+
+function renderSummary(metricKey, d) {
+    const m = d.metrics[metricKey];
+    const el = document.getElementById('summary_' + metricKey);
+    const msg = el.querySelector('.msg');
+    el.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger');
+
+    if (m.mean == null) {
+        msg.textContent = 'no numeric data yet';
+        el.classList.add('alert-info');
+        return;
+    }
+    const total = m.values.filter(v => v != null).length;
+    const out = m.out_of_band_count;
+    const pct = total ? Math.round(100 * out / total) : 0;
+    msg.textContent = out + ' of ' + total + ' calls outside ±' +
+        d.threshold_k.toFixed(1) + 'σ (' + pct + '%)';
+    if (out === 0)      el.classList.add('alert-success');
+    else if (pct < 25)  el.classList.add('alert-warning');
+    else                el.classList.add('alert-danger');
+}
+
+function loadReport() {
+    const window_ = document.getElementById('windowInput').value;
+    const threshold = document.getElementById('thresholdInput').value;
+    document.getElementById('windowValue').textContent = window_;
+    document.getElementById('thresholdValue').textContent = parseFloat(threshold).toFixed(1);
+    document.getElementById('loadingIndicator').style.display = '';
+
+    $.ajax({
+        url: '/api/therapist/patients/' + PATIENT_ID + '/report/data',
+        method: 'GET',
+        data: {window: window_, threshold: threshold},
+        xhrFields: {withCredentials: true},
+        success: function(d) {
+            document.getElementById('loadingIndicator').style.display = 'none';
+            if (d.error) { alert('Error: ' + d.error); return; }
+            const ageStr = d.patient.current_age != null ? d.patient.current_age + 'y' : '?y';
+            document.getElementById('patientMeta').textContent =
+                (d.patient.treatment || 'no treatment') + ' · ' +
+                (d.patient.gender || '?') + ' · ' + ageStr;
+            document.getElementById('patientCallCount').textContent =
+                ' · ' + d.n_calls + ' processed call' + (d.n_calls === 1 ? '' : 's');
+            METRIC_KEYS.forEach(k => { renderSummary(k, d); renderChart(k, d); });
+        },
+        error: function(xhr) {
+            document.getElementById('loadingIndicator').style.display = 'none';
+            alert('Failed to load report data (' + xhr.status + ')');
+        }
+    });
+}
+
+// Debounce slider input so we don't hammer the endpoint while dragging.
+let debounceTimer = null;
+function scheduleLoad() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(loadReport, 150);
+}
+
+$(document).ready(function() {
+    document.getElementById('windowInput').addEventListener('input', scheduleLoad);
+    document.getElementById('thresholdInput').addEventListener('input', scheduleLoad);
+    loadReport();
+});
+</script>
+{% endblock %}

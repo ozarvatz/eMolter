@@ -45,6 +45,7 @@
             {% if current_user.is_superuser %}<td>{{ patient.therapist.nickname if patient.therapist else '-' }}</td>{% endif %}
             <td>
                 <a href="{{ url_for('patient_edit', id=patient.id) }}" class="btn btn-sm btn-default">Edit</a>
+                <a href="{{ url_for('patient_report', patient_id=patient.id) }}" class="btn btn-sm btn-primary">Report</a>
                 <form method="POST" action="{{ url_for('patient_call', id=patient.id) }}" style="display:inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <button type="submit" class="btn btn-sm btn-success">Call</button>
