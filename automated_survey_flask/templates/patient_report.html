@@ -25,13 +25,13 @@
                 </div>
             </div>
             <div class="col-md-4">
-                <div id="summary_length" class="alert alert-info" style="margin-bottom: 0;">
-                    <strong>Length:</strong> <span class="msg">loading…</span>
+                <div id="summary_voice_breaks" class="alert alert-info" style="margin-bottom: 0;">
+                    <strong>Voice Breaks:</strong> <span class="msg">loading…</span>
                 </div>
             </div>
             <div class="col-md-4">
-                <div id="summary_voice_breaks" class="alert alert-info" style="margin-bottom: 0;">
-                    <strong>Voice Breaks:</strong> <span class="msg">loading…</span>
+                <div id="summary_length" class="alert alert-info" style="margin-bottom: 0;">
+                    <strong>Length:</strong> <span class="msg">loading…</span>
                 </div>
             </div>
         </div>
@@ -65,12 +65,12 @@
     <div class="panel-body"><div id="chart_pitch" style="height: 280px;"></div></div>
 </div>
 <div class="panel panel-default">
-    <div class="panel-heading"><strong>Call Length (s)</strong> <span id="stats_length" class="text-muted small"></span></div>
-    <div class="panel-body"><div id="chart_length" style="height: 280px;"></div></div>
-</div>
-<div class="panel panel-default">
     <div class="panel-heading"><strong>Voice Breaks (%)</strong> <span id="stats_voice_breaks" class="text-muted small"></span></div>
     <div class="panel-body"><div id="chart_voice_breaks" style="height: 280px;"></div></div>
+</div>
+<div class="panel panel-default">
+    <div class="panel-heading"><strong>Call Length (s)</strong> <span id="stats_length" class="text-muted small"></span></div>
+    <div class="panel-body"><div id="chart_length" style="height: 280px;"></div></div>
 </div>
 
 <div class="well well-sm">
@@ -93,7 +93,7 @@
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
-const METRIC_KEYS = ['pitch', 'length', 'voice_breaks'];
+const METRIC_KEYS = ['pitch', 'voice_breaks', 'length'];
 const METRIC_UNITS = {pitch: 'Hz', length: 's', voice_breaks: '%'};
 
 // Stable color palette for context segments.
@@ -120,6 +120,7 @@ function buildCustomdata(d, indices) {
         d.utms[i] || '—',
         d.genders[i] || '—',
         d.ages[i] != null ? d.ages[i] : '—',
+        d.dates[i] || '—',
     ]);
 }
 
@@ -137,12 +138,14 @@ function renderChart(metricKey, d) {
 
     const colorMap = contextColorMap(d.contexts);
     const traces = [];
+    // Uniform x = call index (1..N). Dates move into the hover.
+    const xIdx = d.dates.map((_, i) => i + 1);
 
     // 1) Gray spine — single light line connecting all points (no hover).
     traces.push({
         type: 'scatter',
         mode: 'lines',
-        x: d.dates,
+        x: xIdx,
         y: m.values,
         line: {color: '#cccccc', width: 1},
         hoverinfo: 'skip',
@@ -158,7 +161,7 @@ function renderChart(metricKey, d) {
         traces.push({
             type: 'scatter',
             mode: 'lines',
-            x: [d.dates[i], d.dates[i+1]],
+            x: [xIdx[i], xIdx[i+1]],
             y: [m.values[i], m.values[i+1]],
             line: {color: segColor, width: 3},
             hoverinfo: 'skip',
@@ -175,7 +178,7 @@ function renderChart(metricKey, d) {
     });
 
     const hoverTpl =
-        '<b>%{x}</b><br>' +
+        '<b>Call #%{x}</b> · %{customdata[4]}<br>' +
         m.label + ': <b>%{y:.2f} ' + unit + '</b><br>' +
         'Treatment: %{customdata[0]}<br>' +
         'UTM: %{customdata[1]}<br>' +
@@ -187,7 +190,7 @@ function renderChart(metricKey, d) {
         traces.push({
             type: 'scatter',
             mode: 'markers',
-            x: inIdx.map(i => d.dates[i]),
+            x: inIdx.map(i => xIdx[i]),
             y: inIdx.map(i => m.values[i]),
             marker: {
                 size: 9,
@@ -203,7 +206,7 @@ function renderChart(metricKey, d) {
         traces.push({
             type: 'scatter',
             mode: 'markers',
-            x: outIdx.map(i => d.dates[i]),
+            x: outIdx.map(i => xIdx[i]),
             y: outIdx.map(i => m.values[i]),
             marker: {
                 size: 12,
@@ -236,7 +239,14 @@ function renderChart(metricKey, d) {
 
     const layout = {
         margin: {l: 50, r: 20, t: 10, b: 40},
-        xaxis: {type: 'category', tickangle: -30, automargin: true},
+        xaxis: {
+            title: 'Call #',
+            type: 'linear',
+            rangemode: 'tozero',
+            tick0: 1,
+            dtick: Math.max(1, Math.ceil(d.dates.length / 15)),
+            automargin: true,
+        },
         yaxis: {title: unit, zeroline: false},
         shapes: shapes,
         hovermode: 'closest',
