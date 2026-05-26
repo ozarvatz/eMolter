@@ -259,11 +259,16 @@ def ws_media_stream():
         next_q_num = q_num + 1
         state['q_num'] = next_q_num
         state['bot_speaking'] = True
+        t_flush = time.time()
+        total_audio_bytes = 0
 
         # Pre-cached filler plays immediately
         try:
             filler_audio = _tts(_get_filler(lang), lang, gender)
             send_audio(filler_audio)
+            total_audio_bytes += len(filler_audio)
+            print(f"[TIMING MS] filler sent at +{(time.time()-t_flush)*1000:.0f}ms "
+                  f"({len(filler_audio)} bytes, ~{len(filler_audio)/8000*1000:.0f}ms playback)")
         except Exception as e:
             print(f"[MS] filler TTS error: {e}")
 
@@ -288,10 +293,26 @@ def ws_media_stream():
             q_audio = _tts(next_q, lang, gender)
             print(f"[TIMING MS] TTS: {(time.time()-t0)*1000:.1f}ms ({len(q_audio)} bytes)")
             send_audio(q_audio)
+            total_audio_bytes += len(q_audio)
         except Exception as e:
             print(f"[MS] question TTS error: {e}")
 
+        # Hold bot_speaking=True until Twilio has played out the queued audio.
+        # send_audio() queues the bytes near-instantly, but Twilio plays them
+        # at real-time rate (mulaw 8kHz → 1 byte = 125µs, 8000 bytes/s).
+        # If we cleared bot_speaking right away, patient-mic audio would flow
+        # back into Deepgram while the bot is still talking, and any room
+        # echo of our voice would re-enter as bogus transcripts ("artifacts").
+        playback_s = total_audio_bytes / 8000.0
+        elapsed_s  = time.time() - t_flush
+        wait_s     = max(0.0, playback_s - elapsed_s)
+        print(f"[TIMING MS] question sent at +{(time.time()-t_flush)*1000:.0f}ms; "
+              f"total_audio_bytes={total_audio_bytes}, "
+              f"playback={playback_s*1000:.0f}ms, waiting {wait_s*1000:.0f}ms before unmute")
+        if wait_s > 0:
+            gevent.sleep(wait_s)
         state['bot_speaking'] = False
+        print(f"[TIMING MS] bot done speaking at +{(time.time()-t_flush)*1000:.0f}ms")
 
     def _flush_utterance(reason):
         """Concatenate buffered final pieces and hand them to on_transcript.
@@ -363,7 +384,10 @@ def ws_media_stream():
             msg   = json.loads(raw)
             event = msg.get('event')
 
-            print(f"[MS {datetime.now().strftime('%H:%M:%S')}] {event}")
+            # `media` arrives every 20ms (50/s); never log it. Log everything
+            # else so we still see connected/start/mark/stop in order.
+            if event != 'media':
+                print(f"[MS {datetime.now().strftime('%H:%M:%S')}] {event}")
 
             if event == 'connected':
                 pass
@@ -439,12 +463,20 @@ def ws_media_stream():
                 #
                 # End-of-utterance detection:
                 #   interim_results=true  → required to receive `UtteranceEnd`.
-                #   utterance_end_ms=1500 → Deepgram fires `UtteranceEnd` 1.5s
-                #                           after the last word. This is our
-                #                           primary signal that the patient
-                #                           finished speaking.
-                #   endpointing=500       → also flags `speech_final` on the
-                #                           final Results, as a secondary signal.
+                #   utterance_end_ms=1000 → Deepgram fires `UtteranceEnd` 1.0s
+                #                           after the last word. Primary fallback
+                #                           when `speech_final` doesn't fire on
+                #                           nova-3. 1000 is Deepgram's documented
+                #                           minimum — values <1000 return 400
+                #                           Bad Request (confirmed 2026-05-26).
+                #   endpointing=300       → flags `speech_final` on the final
+                #                           Results, the faster primary signal.
+                #                           Lowered from 500ms to make the fast
+                #                           path fire more often / sooner.
+                #                           Risk: mid-sentence breath pauses of
+                #                           >300ms could prematurely close the
+                #                           utterance; revisit if patients are
+                #                           getting cut off.
                 # The receiver buffers `is_final=true` Results and advances
                 # the survey on whichever end signal arrives first.
                 dg_url = (
@@ -453,8 +485,8 @@ def ws_media_stream():
                     f"&encoding=mulaw&sample_rate=8000"
                     f"&language={dg_lang}"
                     f"&interim_results=true"
-                    f"&endpointing=500"
-                    f"&utterance_end_ms=1500"
+                    f"&endpointing=300"
+                    f"&utterance_end_ms=1000"
                 )
                 try:
                     dg_ws[0] = _ws_lib.create_connection(

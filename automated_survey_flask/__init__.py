@@ -50,6 +50,29 @@ def prepare_app(environment=env, p_db=db):
     # load views by importing them
     from . import views # noqa F401
 
+    # Warm up the Groq client so the first patient turn doesn't pay the
+    # ~700ms cold-start cost (Python-side `import groq`, httpx pool setup,
+    # and the initial TLS handshake to api.groq.com). We fire a 1-token
+    # chat completion in a background thread so a slow/unreachable Groq
+    # doesn't block server boot.
+    def _warm_groq():
+        try:
+            from automated_survey_flask.llm_survey_view import _get_groq_client, LLM_MODEL
+            t0 = __import__('time').time()
+            client = _get_groq_client()
+            # Tiny real call → establishes the HTTPS connection pool.
+            client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[{"role": "user", "content": "."}],
+                max_tokens=1,
+                temperature=0.0,
+            )
+            print(f"[BOOT] Groq warmed up in {(__import__('time').time()-t0)*1000:.0f}ms")
+        except Exception as e:
+            print(f"[BOOT] Groq warmup skipped ({type(e).__name__}): {e}")
+    import threading
+    threading.Thread(target=_warm_groq, daemon=True, name='groq-warmup').start()
+
     return app
 
 
