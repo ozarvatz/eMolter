@@ -1,9 +1,32 @@
+"""
+========================================================================
+  ACTIVE LLM CALL FLOW — Twilio Media Streams + Deepgram + Groq
+========================================================================
+
+This module is the canonical implementation of the LLM voice survey.
+From now on, every new LLM-call feature MUST be implemented here, NOT in
+the deprecated `<Gather>` webhook chain inside `llm_survey_view.py`.
+
+Entry points used by the UI:
+  - POST /patients/<id>/relay-call  → `patient_relay_call`
+      The "LLM Call" button on the patient list triggers this.
+  - GET/POST /llm-relay-voice       → `llm_relay_voice`
+      TwiML that returns <Connect><Stream/> pointing at the WebSocket.
+  - WebSocket  /ws/media-stream     → `ws_media_stream`
+      Bidirectional audio: Twilio <-> us <-> Deepgram (STT) + Groq (LLM).
+
+Helpers borrowed from llm_survey_view.py (do not duplicate them here):
+  `_ask_llm`, `_get_filler`, `_vocalize_for_tts`, THANKS, HELLO,
+  VOICE_ALGO, SORRY_FAILED.
+========================================================================
+"""
 import os
 import json
 import time
 import base64
 from datetime import datetime
 from urllib.parse import quote
+from xml.sax.saxutils import escape as xml_escape
 
 import requests as http_requests
 from flask import request, abort, Response
@@ -23,6 +46,7 @@ from .models import db, Call, Patient
 from .llm_survey_view import (
     _ask_llm, _get_filler, _vocalize_for_tts, THANKS, HELLO, VOICE_ALGO, SORRY_FAILED,
 )
+from .therapist_view import snapshot_patient_to_call
 
 TWILIO_NUMBER      = "+17473023043"
 BASE_URL           = "https://www.emolter.org:5000"
@@ -87,21 +111,38 @@ def llm_relay_voice():
     to_phone     = request.args.get('to_phone', '')
     from_phone   = request.args.get('from_phone', TWILIO_NUMBER)
 
+    print(f"[LRV] /llm-relay-voice lang={lang!r} batch={batch!r} "
+          f"name={patient_name!r} to={to_phone!r}")
+
     base_qs = _get_base_questions(lang, batch)
     max_q   = len(base_qs)
 
-    stream_url = (
-        f"{WS_BASE}/ws/media-stream"
-        f"?lang={lang}&name={quote(patient_name)}"
-        f"&batch={batch}&max_q={max_q}"
-        f"&to_phone={quote(to_phone)}&from_phone={quote(from_phone)}"
+    # Twilio does NOT forward query-string params on <Stream url="…">.
+    # Custom data has to be passed via <Parameter> children and arrives in
+    # the WebSocket `start` event under msg['start']['customParameters'].
+    # The URL is now just the endpoint with no query string.
+    stream_url_xml = xml_escape(f"{WS_BASE}/ws/media-stream", {'"': '&quot;'})
+
+    def _param(name, value):
+        # XML-escape parameter values so unusual names (with &, <, ", etc.)
+        # don't break the TwiML document.
+        v = xml_escape(str(value), {'"': '&quot;'})
+        return f'<Parameter name="{name}" value="{v}"/>'
+
+    parameters_xml = (
+        _param('lang',       lang)
+        + _param('batch',      batch)
+        + _param('name',       patient_name)
+        + _param('max_q',      max_q)
+        + _param('to_phone',   to_phone)
+        + _param('from_phone', from_phone)
     )
 
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<Response>'
         '<Connect>'
-        f'<Stream url="{stream_url}"/>'
+        f'<Stream url="{stream_url_xml}">{parameters_xml}</Stream>'
         '</Connect>'
         '<Hangup/>'
         '</Response>'
@@ -123,14 +164,20 @@ def ws_media_stream():
     if not wsock:
         abort(400, "Expected WebSocket request.")
 
-    lang         = request.args.get('lang', 'he-IL')
-    patient_name = request.args.get('name', 'noname')
-    batch        = request.args.get('batch', 'basic')
-    max_q        = int(request.args.get('max_q', 5))
-    to_phone     = request.args.get('to_phone', '')
-    from_phone   = request.args.get('from_phone', TWILIO_NUMBER)
-
-    dg_lang = _LANG_TO_DG.get(lang, 'en-US')
+    # Per-call params come from the `start` event's customParameters,
+    # which originate from the Patient row in the DB (set by the GUI and
+    # passed through patient_relay_call → llm_relay_voice → <Parameter>).
+    # No hardcoded fallbacks here on purpose — if a param is missing we
+    # want a loud error in the log instead of a silent default that could
+    # mask a regression (e.g. Hebrew TTS for an en-US patient).
+    lang         = None
+    patient_name = None
+    batch        = None
+    max_q        = None
+    to_phone     = None
+    from_phone   = None
+    dg_lang      = None
+    print(f"[MS-WS] /ws/media-stream connected; awaiting start event for params")
 
     # Shared state (mutable containers for greenlet access)
     state = {
@@ -140,6 +187,10 @@ def ws_media_stream():
         'history':     [],
         'q_num':       0,
         'bot_speaking': False,
+        # Pieces of the current utterance — accumulated as Deepgram sends
+        # `is_final=true` Results; flushed to on_transcript on UtteranceEnd
+        # (or speech_final, whichever arrives first).
+        'utterance_parts': [],
     }
     dg_ws = [None]  # Deepgram WebSocket
 
@@ -242,21 +293,63 @@ def ws_media_stream():
 
         state['bot_speaking'] = False
 
+    def _flush_utterance(reason):
+        """Concatenate buffered final pieces and hand them to on_transcript.
+        Called when Deepgram signals end of utterance (UtteranceEnd, or a
+        Results event with speech_final=true). Safe to call when buffer
+        is empty — silently no-ops."""
+        parts = state['utterance_parts']
+        if not parts:
+            return
+        full = ' '.join(p for p in parts if p).strip()
+        state['utterance_parts'] = []
+        if not full:
+            return
+        print(f"[DG] flush ({reason}): {full!r}")
+        on_transcript(full)
+
     def deepgram_receiver():
-        """Greenlet: reads transcripts from Deepgram and calls on_transcript."""
+        """Greenlet: reads events from Deepgram and advances the survey on
+        end-of-utterance.
+
+        Event handling:
+          - `Results` with `is_final=true` → append `.transcript` to the
+            current utterance buffer.
+          - `Results` with `speech_final=true` → also flush the buffer (the
+            final piece is already appended above).
+          - `UtteranceEnd`                  → flush the buffer.
+        Every event is logged so we can see exactly what nova-3 emits."""
         with app.app_context():
             while True:
                 try:
                     raw = dg_ws[0].recv()
-                    if raw is None:
+                    # Deepgram closes the WS with an empty frame (raw == '')
+                    # or None depending on the peer's behavior. Either way,
+                    # treat any falsy payload as a normal close signal so we
+                    # don't log a spurious JSON decode error on shutdown.
+                    if not raw:
+                        print("[DG] recv: empty frame — connection closed")
                         break
                     data = json.loads(raw)
-                    if data.get('type') == 'Results':
+                    ev_type = data.get('type')
+                    if ev_type == 'Results':
                         alts = data.get('channel', {}).get('alternatives', [{}])
                         transcript = (alts[0].get('transcript', '') if alts else '').strip()
-                        if data.get('speech_final') and transcript:
-                            print(f"[DG] speech_final: '{transcript}'")
-                            on_transcript(transcript)
+                        is_final     = bool(data.get('is_final'))
+                        speech_final = bool(data.get('speech_final'))
+                        print(f"[DG] Results is_final={is_final} "
+                              f"speech_final={speech_final} text={transcript!r}")
+                        if is_final and transcript:
+                            state['utterance_parts'].append(transcript)
+                        if speech_final:
+                            _flush_utterance('speech_final')
+                    elif ev_type == 'UtteranceEnd':
+                        print(f"[DG] UtteranceEnd last_word_end={data.get('last_word_end')}")
+                        _flush_utterance('UtteranceEnd')
+                    elif ev_type == 'SpeechStarted':
+                        print(f"[DG] SpeechStarted timestamp={data.get('timestamp')}")
+                    else:
+                        print(f"[DG] {ev_type or 'unknown'}: {str(data)[:200]}")
                 except Exception as e:
                     print(f"[DG] recv error: {e}")
                     break
@@ -278,10 +371,47 @@ def ws_media_stream():
             elif event == 'start':
                 state['stream_sid'] = msg['start']['streamSid']
                 state['call_sid']   = msg['start']['callSid']
-                to_phone   = to_phone or msg['start'].get('customParameters', {}).get('to_phone', '')
-                from_phone = from_phone or msg['start'].get('customParameters', {}).get('from_phone', TWILIO_NUMBER)
 
-                print(f"[MS] start stream_sid={state['stream_sid']} call_sid={state['call_sid']}")
+                # Pull the real per-call params from <Parameter> elements
+                # that llm_relay_voice attached to <Stream>. These come from
+                # the Patient row in the DB (set via the GUI) — they are
+                # the single source of truth for this call.
+                cp = msg['start'].get('customParameters', {}) or {}
+                lang         = cp.get('lang')
+                batch        = cp.get('batch')
+                patient_name = cp.get('name')
+                to_phone     = cp.get('to_phone') or ''
+                from_phone   = cp.get('from_phone') or TWILIO_NUMBER
+                try:
+                    max_q = int(cp.get('max_q'))
+                except (TypeError, ValueError):
+                    max_q = None
+
+                # Fail loudly if the DB-derived params didn't arrive — better
+                # than silently defaulting to Hebrew and confusing the patient.
+                if not lang or not batch or max_q is None:
+                    print(f"[MS] start FATAL: missing customParameters — "
+                          f"lang={lang!r} batch={batch!r} max_q={max_q!r} "
+                          f"name={patient_name!r}. Closing.")
+                    try:
+                        wsock.close()
+                    except Exception:
+                        pass
+                    return
+
+                dg_lang = _LANG_TO_DG.get(lang)
+                if not dg_lang:
+                    print(f"[MS] start FATAL: lang={lang!r} has no Deepgram "
+                          f"mapping in _LANG_TO_DG. Closing.")
+                    try:
+                        wsock.close()
+                    except Exception:
+                        pass
+                    return
+
+                print(f"[MS] start stream_sid={state['stream_sid']} "
+                      f"call_sid={state['call_sid']} lang={lang!r} batch={batch!r} "
+                      f"max_q={max_q} name={patient_name!r} dg_lang={dg_lang!r}")
 
                 # Create DB record
                 call_record = Call.query.filter_by(
@@ -302,19 +432,43 @@ def ws_media_stream():
                     db.session.commit()
                 state['call_record'] = call_record
 
-                # Connect to Deepgram
+                # Connect to Deepgram.
+                # `model=nova-3` is required for Hebrew streaming — the default
+                # model (and nova-2) both 400 on `language=he`/`language=he-IL`.
+                # nova-3 supports he, de, and en-US, so we pin it for all langs.
+                #
+                # End-of-utterance detection:
+                #   interim_results=true  → required to receive `UtteranceEnd`.
+                #   utterance_end_ms=1500 → Deepgram fires `UtteranceEnd` 1.5s
+                #                           after the last word. This is our
+                #                           primary signal that the patient
+                #                           finished speaking.
+                #   endpointing=500       → also flags `speech_final` on the
+                #                           final Results, as a secondary signal.
+                # The receiver buffers `is_final=true` Results and advances
+                # the survey on whichever end signal arrives first.
                 dg_url = (
                     f"wss://api.deepgram.com/v1/listen"
-                    f"?encoding=mulaw&sample_rate=8000"
+                    f"?model=nova-3"
+                    f"&encoding=mulaw&sample_rate=8000"
                     f"&language={dg_lang}"
-                    f"&interim_results=false"
+                    f"&interim_results=true"
                     f"&endpointing=500"
-                    f"&punctuate=true"
+                    f"&utterance_end_ms=1500"
                 )
-                dg_ws[0] = _ws_lib.create_connection(
-                    dg_url,
-                    header=[f"Authorization: Token {DEEPGRAM_API_KEY}"],
-                )
+                try:
+                    dg_ws[0] = _ws_lib.create_connection(
+                        dg_url,
+                        header=[f"Authorization: Token {DEEPGRAM_API_KEY}"],
+                    )
+                except Exception as e:
+                    print(f"[MS] Deepgram connect FAILED ({type(e).__name__}): {e}")
+                    print(f"[MS] dg_url was: {dg_url}")
+                    try:
+                        wsock.close()
+                    except Exception:
+                        pass
+                    return
                 gevent.spawn(deepgram_receiver)
 
                 # Send greeting
@@ -388,6 +542,15 @@ def patient_relay_call(id):
     if not current_user.is_superuser and patient.therapist_id != current_user.id:
         abort(403)
 
+    # Single source of truth: the Patient row from the DB. Everything that
+    # follows derives from these values — TwiML URL, Stream URL, WS lang,
+    # Call snapshot — no defaults along the way.
+    lang  = patient.language
+    batch = patient.batch or 'basic'
+    print(f"[PRC] patient.id={patient.id} name={patient.name!r} "
+          f"language={lang!r} batch={batch!r} gender={patient.gender!r} "
+          f"birth_year={patient.birth_year!r} treatment={patient.treatment!r}")
+
     client = Client(
         _os.environ.get('TWILIO_ACCOUNT_SID'),
         _os.environ.get('TWILIO_AUTH_TOKEN'),
@@ -399,9 +562,9 @@ def patient_relay_call(id):
             from_=TWILIO_NUMBER,
             url=(
                 f'{BASE_URL}/llm-relay-voice'
-                f'?lang={patient.language}'
+                f'?lang={quote(lang)}'
                 f'&name={quote(patient.nickname or patient.name)}'
-                f'&batch={patient.batch or "basic"}'
+                f'&batch={quote(batch)}'
                 f'&to_phone={quote(patient.phone)}'
                 f'&from_phone={quote(TWILIO_NUMBER)}'
             ),
@@ -419,8 +582,13 @@ def patient_relay_call(id):
             conversationText='[]',
             patientPhone=patient.phone,
             carrierPhone=TWILIO_NUMBER,
-            questionsFile=f"questions_{patient.batch or 'basic'}_{patient.language}.json",
+            questionsFile=f"questions_{batch}_{lang}.json",
         )
+        # Snapshot patient meta so downstream readers (ws_media_stream,
+        # exports, reports) see the values that were true at call time.
+        # Without this, cr.patient_gender is None and TTS gender defaults to
+        # male regardless of the GUI selection.
+        snapshot_patient_to_call(call_record, patient)
         db.session.add(call_record)
         db.session.commit()
 

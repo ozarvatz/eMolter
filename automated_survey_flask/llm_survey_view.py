@@ -1,3 +1,34 @@
+"""
+========================================================================
+  DEPRECATED — NOT IN USE FOR NEW LLM CALLS
+========================================================================
+
+The voice flow defined in this module (the `<Gather speechTimeout>` webhook
+chain at /llm-voice → /llm-handle-speech → /llm-next-question) is NO LONGER
+WIRED TO ANY UI. The "LLM Call" button now triggers `patient_relay_call`
+in `conversation_relay_view.py`, which uses Twilio Media Streams +
+Deepgram STT + Groq streaming for near-real-time conversation.
+
+GOING FORWARD: every new LLM-call feature MUST be implemented in
+`conversation_relay_view.py` (the ConversationRelay / Media Streams flow)
+instead of extending the deprecated routes below. Do not add new
+`<Gather>`-based handlers here.
+
+What's still in use from this module:
+  - Shared helpers consumed by conversation_relay_view.py:
+    `_ask_llm`, `_get_filler`, `_vocalize_for_tts`, `THANKS`, `HELLO`,
+    `VOICE_ALGO`, `SORRY_FAILED`.
+  - The recording-status callback `/llm-recording-callback` — still
+    referenced by `patient_relay_call` for dual-channel recording.
+
+What's deprecated (kept only so old Twilio webhook URLs don't 404):
+  - /llm-voice              — TwiML entry, Gather-based
+  - /llm-handle-speech      — speech transcript handler
+  - /llm-next-question      — next-question dispatcher
+  - /patients/<id>/llm-call — old "LLM Call" button target (use
+                              /patients/<id>/relay-call instead)
+========================================================================
+"""
 import os
 import json
 import time
@@ -386,6 +417,8 @@ def ask_llm_stream(lang, batch, history, q_num, max_questions, gender):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+# DEPRECATED — not wired to any UI. New LLM calls go through
+# conversation_relay_view.llm_relay_voice. See module docstring.
 @app.route('/llm-voice', methods=['GET', 'POST'])
 def llm_voice_survey():
     lang         = request.args.get('lang') or 'he-IL'
@@ -475,6 +508,7 @@ def llm_voice_survey():
     return Response(str(twiml), mimetype='text/xml')
 
 
+# DEPRECATED — Gather-based handler. See module docstring.
 @app.route('/llm-handle-speech', methods=['POST'])
 def llm_handle_speech():
     lang          = request.args.get('lang') or 'he-IL'
@@ -543,6 +577,7 @@ def llm_handle_speech():
     return Response(str(twiml), mimetype='text/xml')
 
 
+# DEPRECATED — Gather-based next-question dispatcher. See module docstring.
 @app.route('/llm-next-question', methods=['POST'])
 def llm_next_question():
     lang          = request.args.get('lang') or 'he-IL'
@@ -635,6 +670,8 @@ def llm_recording_callback():
     return '', 200
 
 
+# DEPRECATED — old "LLM Call" button target. The button now POSTs to
+# patient_relay_call (/patients/<id>/relay-call) instead. See module docstring.
 @app.route('/patients/<int:id>/llm-call', methods=['POST'])
 @login_required
 def patient_llm_call(id):

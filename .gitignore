@@ -9,3 +9,4 @@ callPatientStub.sh
 *.csv
 patients.json
 cookies.txt
+log/

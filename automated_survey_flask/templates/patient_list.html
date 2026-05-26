@@ -50,7 +50,7 @@
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <button type="submit" class="btn btn-sm btn-success">Call</button>
                 </form>
-                <form method="POST" action="{{ url_for('patient_llm_call', id=patient.id) }}" style="display:inline;">
+                <form method="POST" action="{{ url_for('patient_relay_call', id=patient.id) }}" style="display:inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <button type="submit" class="btn btn-sm btn-info">LLM Call</button>
                 </form>
