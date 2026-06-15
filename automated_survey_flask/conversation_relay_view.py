@@ -24,6 +24,7 @@ import os
 import json
 import time
 import base64
+import threading
 from datetime import datetime
 from urllib.parse import quote
 from xml.sax.saxutils import escape as xml_escape
@@ -47,6 +48,12 @@ from .llm_survey_view import (
     _ask_llm, _get_filler, _vocalize_for_tts, THANKS, HELLO, VOICE_ALGO, SORRY_FAILED,
 )
 from .therapist_view import snapshot_patient_to_call
+from .topic_extractor import extract_topics
+
+# How often (in patient utterances) to re-run topic extraction during a live
+# call. 1 = every turn (Strategy B from the design). 3 = lighter (Strategy A).
+# Bump upward if Groq rate-limits or cost becomes an issue.
+TOPIC_EXTRACT_EVERY_N_TURNS = 1
 
 TWILIO_NUMBER      = "+17473023043"
 BASE_URL           = "https://www.emolter.org:5000"
@@ -191,6 +198,14 @@ def ws_media_stream():
         # `is_final=true` Results; flushed to on_transcript on UtteranceEnd
         # (or speech_final, whichever arrives first).
         'utterance_parts': [],
+        # Topic extraction state. `topics` is the latest dict
+        # {"bot_topics": [...], "patient_topics": [...]} from the topic-
+        # extractor thread; `topic_turn` counts patient answers since the
+        # last extraction. Kept in-memory only during the call (no DB
+        # writes from the worker thread); persisted to call_record.topics
+        # at end-of-call.
+        'topics':      {},
+        'topic_turn':  0,
     }
     dg_ws = [None]  # Deepgram WebSocket
 
@@ -214,6 +229,18 @@ def ws_media_stream():
                 "media": {"payload": base64.b64encode(chunk).decode()},
             })
 
+    def _topics_runner(history_snapshot):
+        """Worker thread: run topic extraction off the critical path.
+        Failures are swallowed so the conversation never breaks because of
+        a topic-extraction error or a Groq hiccup."""
+        try:
+            t0 = time.time()
+            topics = extract_topics(history_snapshot)
+            state['topics'] = topics
+            print(f"[TOPICS] {(time.time()-t0)*1000:.0f}ms -> {topics}")
+        except Exception as e:
+            print(f"[TOPICS] error: {type(e).__name__}: {e}")
+
     def on_transcript(transcript):
         """Called from deepgram_receiver greenlet when a final transcript arrives."""
         if state['bot_speaking']:
@@ -226,6 +253,21 @@ def ws_media_stream():
         history = state['history']
         if history and history[-1].get('a') == '':
             history[-1]['a'] = transcript or '[no answer]'
+
+        # Fire topic extraction every Nth patient answer. Snapshot history
+        # (list of dicts) so the worker doesn't read a mutating object.
+        # Using a real OS thread instead of gevent.spawn because the Groq
+        # SDK uses httpx, which doesn't yield to gevent — a greenlet would
+        # serialize against the main Groq call instead of running in
+        # parallel. The thread is daemonic so it dies with the WS handler.
+        state['topic_turn'] += 1
+        if state['topic_turn'] % TOPIC_EXTRACT_EVERY_N_TURNS == 0:
+            history_snapshot = [dict(t) for t in history]
+            threading.Thread(
+                target=_topics_runner,
+                args=(history_snapshot,),
+                daemon=True,
+            ).start()
 
         cr     = state.get('call_record')
         gender = 'female' if (cr and (cr.patient_gender or '').lower() == 'female') else 'male'
@@ -554,6 +596,17 @@ def ws_media_stream():
                 dg_ws[0].close()
             except Exception:
                 pass
+        # Persist whatever topics were extracted during the call. Leave the
+        # column NULL if nothing landed — offline extract_topics.py will
+        # backfill on its next run.
+        try:
+            cr = state.get('call_record')
+            if cr and state['topics']:
+                cr.topics = state['topics']
+                db.session.commit()
+                print(f"[TOPICS] persisted on close: {state['topics']}")
+        except Exception as e:
+            print(f"[TOPICS] persist error: {e}")
         print(f"[MS] connection closed call_sid={state['call_sid']}")
 
     return Response('', status=200)

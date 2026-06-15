@@ -109,6 +109,7 @@ class Call(db.Model):
     carrier_phone = db.Column(db.String(20), unique=False)
     questions_file = db.Column(db.String(20), unique=False)
     prosody_results = db.Column(db.JSON, nullable=True)
+    topics = db.Column(db.JSON, nullable=True)  # list[str], English labels
     is_processed = db.Column(db.Boolean, default=False)
     is_inexcel = db.Column(db.Boolean, default=False)
     # Snapshot of patient fields at call-creation time so the export reflects what was true then,
