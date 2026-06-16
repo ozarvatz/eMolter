@@ -140,6 +140,15 @@ def patient_report_data(patient_id):
         threshold_k = 2.0
     threshold_k = max(0.5, min(threshold_k, 5.0))
 
+    # `visible` clips the chart to the most recent N calls. Baseline is still
+    # computed from up to `window` of the FULL history so the band reflects
+    # the patient's true normal, not just what's currently on screen.
+    try:
+        visible = int(request.args.get('visible', 14))
+    except (TypeError, ValueError):
+        visible = 14
+    visible = max(2, min(visible, 1000))
+
     calls = (
         Call.query
         .filter(Call.patient_phone == patient.phone)
@@ -149,32 +158,39 @@ def patient_report_data(patient_id):
         .all()
     )
 
-    dates = [c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None for c in calls]
-    treatments = [c.patient_treatment for c in calls]
-    utms = [_utm_source(c.patient_utm_params) for c in calls]
-    genders = [c.patient_gender for c in calls]
-    ages = [_age_at(c.patient_birth_year, c.created_at) for c in calls]
-
-    # A context "key" per call — when this changes between consecutive calls,
-    # the line segment is drawn in a new color.
-    contexts = [
+    # Full-history per-call arrays (used for baseline)
+    all_dates = [c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None for c in calls]
+    all_call_ids = [c.id for c in calls]
+    all_treatments = [c.patient_treatment for c in calls]
+    all_utms = [_utm_source(c.patient_utm_params) for c in calls]
+    all_genders = [c.patient_gender for c in calls]
+    all_ages = [_age_at(c.patient_birth_year, c.created_at) for c in calls]
+    all_contexts = [
         f"{t or '∅'} | {u or '∅'} | {g or '∅'}"
-        for t, u, g in zip(treatments, utms, genders)
+        for t, u, g in zip(all_treatments, all_utms, all_genders)
     ]
+
+    # Decide the display slice — the last `visible` calls.
+    n_total = len(calls)
+    n_show = min(visible, n_total)
+    start = n_total - n_show
 
     metrics = {}
     for key, label, extractor in METRICS:
-        values = [extractor(c.prosody_results) for c in calls]
-        mean, std, n = _baseline_stats(values, window)
+        all_values = [extractor(c.prosody_results) for c in calls]
+        mean, std, n = _baseline_stats(all_values, window)  # baseline from full history
         if mean is None or std is None:
             low = high = None
         else:
             low = mean - threshold_k * std
             high = mean + threshold_k * std
-        out_of_band = [
+        all_out_of_band = [
             (v is not None and low is not None and (v < low or v > high))
-            for v in values
+            for v in all_values
         ]
+        # Sliced to display range
+        values = all_values[start:]
+        out_of_band = all_out_of_band[start:]
         metrics[key] = {
             'label': label,
             'values': values,
@@ -199,12 +215,84 @@ def patient_report_data(patient_id):
         },
         'window': window,
         'threshold_k': threshold_k,
-        'n_calls': len(calls),
-        'dates': dates,
-        'treatments': treatments,
-        'utms': utms,
-        'genders': genders,
-        'ages': ages,
-        'contexts': contexts,
+        'visible': visible,
+        'n_calls': n_total,
+        'n_visible': n_show,
+        'dates':      all_dates[start:],
+        'call_ids':   all_call_ids[start:],
+        'treatments': all_treatments[start:],
+        'utms':       all_utms[start:],
+        'genders':    all_genders[start:],
+        'ages':       all_ages[start:],
+        'contexts':   all_contexts[start:],
         'metrics': metrics,
+    })
+
+
+@app.route('/api/therapist/calls/<int:call_id>/conversation')
+@csrf.exempt
+@login_required
+def call_conversation_data(call_id):
+    """Return one call's conversation + topics for the modal viewer.
+    Auth: patient must belong to current therapist (or superuser)."""
+    import json as _json
+    call = Call.query.get(call_id)
+    if not call:
+        abort(404)
+
+    # Authorize: find the patient row by phone and check ownership.
+    patient = (Patient.query
+               .filter_by(phone=call.patient_phone, deleted=False)
+               .first())
+    if patient and not current_user.is_superuser and patient.therapist_id != current_user.id:
+        abort(403)
+
+    # Parse conversation_text into a list of {q, a} dicts. Two formats:
+    #   - LLM flow: JSON array string [{"q":"...","a":"..."}]
+    #   - non-LLM:  "Q1: ...\nA1: ...\nQ2: ..." text
+    turns = []
+    text = (call.conversation_text or '').strip()
+    parsed_json = False
+    if text:
+        try:
+            data = _json.loads(text)
+            if isinstance(data, list):
+                turns = [{'q': (t.get('q') or '').strip(),
+                          'a': (t.get('a') or '').strip()} for t in data]
+                parsed_json = True
+        except (ValueError, TypeError):
+            pass
+        if not parsed_json:
+            # Best-effort parse of "Qn: ...\nAn: ..." pairs.
+            import re as _re
+            current_q = None
+            for line in text.splitlines():
+                m_q = _re.match(r'^\s*Q\d*\s*:\s*(.*)', line)
+                m_a = _re.match(r'^\s*A\d*\s*:\s*(.*)', line)
+                if m_q:
+                    current_q = m_q.group(1).strip()
+                    turns.append({'q': current_q, 'a': ''})
+                elif m_a and turns:
+                    turns[-1]['a'] = m_a.group(1).strip()
+                elif turns and not m_q:
+                    # Continuation line — append to last segment.
+                    if turns[-1]['a'] == '':
+                        turns[-1]['q'] += (' ' + line.strip()) if line.strip() else ''
+                    else:
+                        turns[-1]['a'] += (' ' + line.strip()) if line.strip() else ''
+            if not turns and text:
+                turns = [{'q': '', 'a': text}]
+
+    topics = call.topics if isinstance(call.topics, dict) else {}
+
+    return jsonify({
+        'call_id':     call.id,
+        'call_sid':    call.call_sid,
+        'created_at':  call.created_at.strftime('%Y-%m-%d %H:%M') if call.created_at else None,
+        'patient_phone': call.patient_phone,
+        'turns':       turns,
+        'topics': {
+            'bot_topics':     topics.get('bot_topics', []) or [],
+            'patient_topics': topics.get('patient_topics', []) or [],
+        },
     })

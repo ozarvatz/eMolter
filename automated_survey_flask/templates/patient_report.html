@@ -42,6 +42,12 @@
 <div class="well well-sm">
     <form id="reportControls" class="form-inline" onsubmit="return false;">
         <div class="form-group" style="margin-right: 25px;">
+            <label for="visibleInput">Show last N calls:</label>
+            <input id="visibleInput" type="range" min="2" max="200" value="14"
+                   style="vertical-align: middle; width: 200px;" />
+            <span id="visibleValue" style="display: inline-block; min-width: 30px; font-weight: bold;">14</span>
+        </div>
+        <div class="form-group" style="margin-right: 25px;">
             <label for="windowInput">Baseline window (last N calls):</label>
             <input id="windowInput" type="range" min="2" max="100" value="30"
                    style="vertical-align: middle; width: 200px;" />
@@ -79,9 +85,47 @@
         Each point is one processed call. The shaded band is the patient's baseline
         (mean ±k·STD over the last N calls). Red markers fall outside that band.
         Line color changes when the patient's <em>treatment</em>, <em>UTM source</em>,
-        or <em>gender</em> changes between calls. Hover any point to see the
-        treatment, UTM, gender, and age at that call.
+        or <em>gender</em> changes between calls. Hover any point for treatment, UTM,
+        gender, and age. <strong>Click any point</strong> to see that call's
+        conversation and extracted topics.
     </small>
+</div>
+
+<!-- Conversation modal -->
+<div class="modal fade" id="conversationModal" tabindex="-1" role="dialog" aria-labelledby="conversationModalTitle">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <h4 class="modal-title" id="conversationModalTitle">Call conversation</h4>
+                <div class="text-muted small" id="conversationModalSubtitle"></div>
+            </div>
+            <div class="modal-body">
+                <div id="modalLoading" class="text-muted">Loading…</div>
+                <div id="modalError" class="alert alert-danger" style="display:none;"></div>
+                <div id="modalContent" style="display:none;">
+                    <div class="row" style="margin-bottom: 15px;">
+                        <div class="col-md-6">
+                            <strong>Bot topics</strong>
+                            <div id="botTopics" class="topics-pills"></div>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Patient topics</strong>
+                            <div id="patientTopics" class="topics-pills"></div>
+                        </div>
+                    </div>
+                    <hr>
+                    <strong>Conversation</strong>
+                    <div id="conversationTurns" style="margin-top: 8px;"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
@@ -90,6 +134,33 @@
 <style>
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+.topics-pills { margin-top: 4px; }
+.topic-pill {
+    display: inline-block;
+    padding: 3px 10px;
+    margin: 2px 4px 2px 0;
+    border-radius: 12px;
+    font-size: 12px;
+    background: #eef;
+    color: #336;
+    border: 1px solid #ccd;
+}
+.topic-pill.bot { background: #f5f5f5; color: #555; border-color: #ddd; }
+.topic-pill.safety {
+    background: #fde0e0; color: #a02020; border-color: #f5b0b0;
+    font-weight: bold;
+}
+.turn-q, .turn-a {
+    padding: 8px 12px;
+    border-radius: 10px;
+    margin: 6px 0;
+    max-width: 80%;
+    line-height: 1.4;
+}
+.turn-q { background: #eef4fb; color: #234; margin-right: auto; }
+.turn-a { background: #e6f7e9; color: #243; margin-left: auto; text-align: right; }
+.turn-label { font-size: 10px; opacity: 0.6; display: block; margin-bottom: 2px; }
+#chart_pitch, #chart_voice_breaks, #chart_length { cursor: pointer; }
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
@@ -121,8 +192,14 @@ function buildCustomdata(d, indices) {
         d.genders[i] || '—',
         d.ages[i] != null ? d.ages[i] : '—',
         d.dates[i] || '—',
+        d.call_ids ? d.call_ids[i] : null,    // index 5: call_id for click
     ]);
 }
+
+// Canonical safety/crisis topics — highlighted differently in the modal.
+const SAFETY_TOPICS = new Set([
+    'suicidal_ideation', 'self_harm', 'substance_use'
+]);
 
 function renderChart(metricKey, d) {
     const m = d.metrics[metricKey];
@@ -254,6 +331,17 @@ function renderChart(metricKey, d) {
 
     Plotly.react(elId, traces, layout, {displayModeBar: false, responsive: true});
 
+    // Wire click handler on marker traces (each marker carries call_id in
+    // customdata[5]). Re-bind on every render because Plotly.react rebuilds.
+    const chartEl = document.getElementById(elId);
+    chartEl.removeAllListeners && chartEl.removeAllListeners('plotly_click');
+    chartEl.on('plotly_click', function(ev) {
+        const pt = ev.points && ev.points[0];
+        if (!pt || !pt.customdata) return;
+        const callId = pt.customdata[5];
+        if (callId) openConversationModal(callId);
+    });
+
     // Sub-heading stats text.
     const statsEl = document.getElementById('stats_' + metricKey);
     if (m.mean != null) {
@@ -290,14 +378,16 @@ function renderSummary(metricKey, d) {
 function loadReport() {
     const window_ = document.getElementById('windowInput').value;
     const threshold = document.getElementById('thresholdInput').value;
+    const visible = document.getElementById('visibleInput').value;
     document.getElementById('windowValue').textContent = window_;
     document.getElementById('thresholdValue').textContent = parseFloat(threshold).toFixed(1);
+    document.getElementById('visibleValue').textContent = visible;
     document.getElementById('loadingIndicator').style.display = '';
 
     $.ajax({
         url: '/api/therapist/patients/' + PATIENT_ID + '/report/data',
         method: 'GET',
-        data: {window: window_, threshold: threshold},
+        data: {window: window_, threshold: threshold, visible: visible},
         xhrFields: {withCredentials: true},
         success: function(d) {
             document.getElementById('loadingIndicator').style.display = 'none';
@@ -306,8 +396,10 @@ function loadReport() {
             document.getElementById('patientMeta').textContent =
                 (d.patient.treatment || 'no treatment') + ' · ' +
                 (d.patient.gender || '?') + ' · ' + ageStr;
-            document.getElementById('patientCallCount').textContent =
-                ' · ' + d.n_calls + ' processed call' + (d.n_calls === 1 ? '' : 's');
+            const shownText = (d.n_visible < d.n_calls)
+                ? ' · showing ' + d.n_visible + ' of ' + d.n_calls + ' calls'
+                : ' · ' + d.n_calls + ' processed call' + (d.n_calls === 1 ? '' : 's');
+            document.getElementById('patientCallCount').textContent = shownText;
             METRIC_KEYS.forEach(k => { renderSummary(k, d); renderChart(k, d); });
         },
         error: function(xhr) {
@@ -315,6 +407,84 @@ function loadReport() {
             alert('Failed to load report data (' + xhr.status + ')');
         }
     });
+}
+
+// --- Conversation modal -----------------------------------------------------
+function openConversationModal(callId) {
+    document.getElementById('modalLoading').style.display = '';
+    document.getElementById('modalContent').style.display = 'none';
+    document.getElementById('modalError').style.display = 'none';
+    document.getElementById('conversationModalSubtitle').textContent = 'Call #' + callId;
+    $('#conversationModal').modal('show');
+
+    $.ajax({
+        url: '/api/therapist/calls/' + callId + '/conversation',
+        method: 'GET',
+        xhrFields: {withCredentials: true},
+        success: function(d) {
+            document.getElementById('modalLoading').style.display = 'none';
+            document.getElementById('modalContent').style.display = '';
+            document.getElementById('conversationModalSubtitle').textContent =
+                'Call #' + d.call_id + ' · ' + (d.created_at || 'no date') +
+                ' · ' + (d.patient_phone || '');
+
+            renderTopicPills('botTopics',     d.topics.bot_topics,     'bot');
+            renderTopicPills('patientTopics', d.topics.patient_topics, 'patient');
+
+            const turnsEl = document.getElementById('conversationTurns');
+            turnsEl.innerHTML = '';
+            if (!d.turns || !d.turns.length) {
+                turnsEl.innerHTML = '<div class="text-muted">(no conversation text)</div>';
+                return;
+            }
+            d.turns.forEach((t, i) => {
+                if (t.q) {
+                    const qDiv = document.createElement('div');
+                    qDiv.className = 'turn-q';
+                    qDiv.innerHTML = '<span class="turn-label">Bot · Q' + (i+1) + '</span>' +
+                                     escapeHtml(t.q);
+                    turnsEl.appendChild(qDiv);
+                }
+                if (t.a) {
+                    const aDiv = document.createElement('div');
+                    aDiv.className = 'turn-a';
+                    aDiv.innerHTML = '<span class="turn-label">Patient · A' + (i+1) + '</span>' +
+                                     escapeHtml(t.a);
+                    turnsEl.appendChild(aDiv);
+                }
+            });
+        },
+        error: function(xhr) {
+            document.getElementById('modalLoading').style.display = 'none';
+            const errEl = document.getElementById('modalError');
+            errEl.style.display = '';
+            errEl.textContent = 'Failed to load call ' + callId + ' (' + xhr.status + ')';
+        }
+    });
+}
+
+function renderTopicPills(elId, topics, role) {
+    const el = document.getElementById(elId);
+    el.innerHTML = '';
+    if (!topics || !topics.length) {
+        el.innerHTML = '<span class="text-muted small">(none)</span>';
+        return;
+    }
+    topics.forEach(t => {
+        const span = document.createElement('span');
+        let cls = 'topic-pill';
+        if (role === 'bot') cls += ' bot';
+        if (SAFETY_TOPICS.has(t)) cls += ' safety';
+        span.className = cls;
+        span.textContent = t;
+        el.appendChild(span);
+    });
+}
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Debounce slider input so we don't hammer the endpoint while dragging.
@@ -325,6 +495,7 @@ function scheduleLoad() {
 }
 
 $(document).ready(function() {
+    document.getElementById('visibleInput').addEventListener('input', scheduleLoad);
     document.getElementById('windowInput').addEventListener('input', scheduleLoad);
     document.getElementById('thresholdInput').addEventListener('input', scheduleLoad);
     loadReport();

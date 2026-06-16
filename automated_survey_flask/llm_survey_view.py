@@ -361,7 +361,7 @@ def _ask_llm(lang, batch, history, q_num, max_questions, gender):
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_content},
         ],
-        max_tokens=80,
+        max_tokens=150,
         temperature=0.7,
     )
     print(f"[TIMING] Groq API call: {(time.time()-t0)*1000:.1f}ms")
@@ -403,7 +403,7 @@ def ask_llm_stream(lang, batch, history, q_num, max_questions, gender):
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_content},
         ],
-        max_tokens=80,
+        max_tokens=150,
         temperature=0.7,
         stream=True,
     )
