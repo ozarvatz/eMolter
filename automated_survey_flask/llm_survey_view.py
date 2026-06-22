@@ -297,20 +297,43 @@ def _call_gender(call_sid):
     return _normalize_gender(call.patient_gender if call else None)
 
 
-def _build_llm_messages(lang, batch, history, q_num, max_questions, gender):
-    """Build (system_prompt, user_content) for Groq from the active LlmPrompt row for `lang`.
+def _build_llm_messages(lang, batch, history, q_num, max_questions, gender,
+                        prompt_name=None,
+                        turn_instruction='', engagement_topics=None):
+    """Build (system_prompt, user_content) for Groq from the active LlmPrompt row.
+
+    `prompt_name` picks the persona (LlmPrompt.name). When None, falls back to
+    the language's 'default' persona — preserving today's behavior for any
+    QuestionSet that doesn't explicitly choose a prompt.
+
+    If the named persona is missing for that lang, falls back to the lang's
+    default and logs a warning rather than crashing the call.
+
+    `turn_instruction` is a code-computed per-turn directive that the persona
+    prompt can optionally splice via the `{turn_instruction}` placeholder.
+    Empty string for normal scripted turns; populated when the caller wants
+    to nudge the LLM (e.g. extension mode in by_time questionnaires).
+
+    `engagement_topics` is a list of patient topics to surface for extension
+    turns. Rendered as a comma-joined string into `{engagement_topics}`.
+    Empty list / None → empty string. Safety topics MUST be filtered out by
+    the caller before passing in.
 
     Templates support these placeholders (Python str.format):
-      {lang}, {numbered}, {q_num}, {max_questions}, {history_lines}, {last_answer}, {gender}
+      {lang}, {numbered}, {q_num}, {max_questions}, {history_lines},
+      {last_answer}, {gender}, {turn_instruction}, {engagement_topics}
 
-    `gender` is 'female' or 'male' (normalized by _normalize_gender).
-
-    Raises RuntimeError if no active LlmPrompt exists for the language —
-    we never silently fall back; configure one at /admin/prompts.
+    Raises RuntimeError only if NO active prompt at all exists for the lang —
+    even the default is missing. Configure one at /admin/prompts.
     """
     from automated_survey_flask.models import LlmPrompt
 
-    prompt = LlmPrompt.active_for(lang)
+    prompt = LlmPrompt.active_for(lang, name=prompt_name)
+    if not prompt and prompt_name:
+        # Named persona missing — fall back to default so the call survives.
+        print(f"[PROMPT] persona={prompt_name!r} missing for lang={lang!r}; "
+              f"falling back to default")
+        prompt = LlmPrompt.active_for(lang)
     if not prompt:
         raise RuntimeError(
             f"No active LlmPrompt for lang={lang}. "
@@ -333,6 +356,9 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions, gender):
     else:
         gender_word = gender
 
+    # Engagement topics → comma-joined string, empty when no topics.
+    eng_str = ", ".join(engagement_topics) if engagement_topics else ""
+
     variables = {
         'lang': lang,
         'numbered': numbered,
@@ -341,6 +367,8 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions, gender):
         'history_lines': history_lines,
         'last_answer': last_answer,
         'gender': gender_word,
+        'turn_instruction':  turn_instruction or '',
+        'engagement_topics': eng_str,
     }
 
     system_prompt = prompt.system_template.format(**variables)
@@ -349,9 +377,20 @@ def _build_llm_messages(lang, batch, history, q_num, max_questions, gender):
     return system_prompt, user_content
 
 
-def _ask_llm(lang, batch, history, q_num, max_questions, gender):
-    """Ask Groq to generate the next survey question (synchronous)."""
-    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions, gender)
+def _ask_llm(lang, batch, history, q_num, max_questions, gender,
+             prompt_name=None, turn_instruction='', engagement_topics=None):
+    """Ask Groq to generate the next survey question (synchronous).
+
+    `prompt_name` picks the persona (LlmPrompt.name). None → default persona.
+    `turn_instruction` + `engagement_topics` populate the optional placeholders
+    used by by_time mode extension turns.
+    """
+    system_prompt, user_content = _build_llm_messages(
+        lang, batch, history, q_num, max_questions, gender,
+        prompt_name=prompt_name,
+        turn_instruction=turn_instruction,
+        engagement_topics=engagement_topics,
+    )
 
     client = _get_groq_client()
     t0 = time.time()
@@ -361,7 +400,7 @@ def _ask_llm(lang, batch, history, q_num, max_questions, gender):
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_content},
         ],
-        max_tokens=150,
+        max_tokens=220,  # safety ceiling only; brevity is enforced by the persona prompt, not this cap (120 chopped Hebrew mid-word)
         temperature=0.7,
     )
     print(f"[TIMING] Groq API call: {(time.time()-t0)*1000:.1f}ms")
@@ -392,9 +431,18 @@ def _ask_llm(lang, batch, history, q_num, max_questions, gender):
 #    - שאלה {q_num} מתוך {max_questions}."
 
 
-def ask_llm_stream(lang, batch, history, q_num, max_questions, gender):
-    """Generator — yields text tokens from Groq for use with ConversationRelay streaming."""
-    system_prompt, user_content = _build_llm_messages(lang, batch, history, q_num, max_questions, gender)
+def ask_llm_stream(lang, batch, history, q_num, max_questions, gender,
+                   prompt_name=None, turn_instruction='', engagement_topics=None):
+    """Generator — yields text tokens from Groq for use with ConversationRelay streaming.
+
+    `prompt_name` picks the persona (LlmPrompt.name). None → default persona.
+    """
+    system_prompt, user_content = _build_llm_messages(
+        lang, batch, history, q_num, max_questions, gender,
+        prompt_name=prompt_name,
+        turn_instruction=turn_instruction,
+        engagement_topics=engagement_topics,
+    )
     client = _get_groq_client()
     t0 = time.time()
     stream = client.chat.completions.create(
@@ -403,7 +451,7 @@ def ask_llm_stream(lang, batch, history, q_num, max_questions, gender):
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_content},
         ],
-        max_tokens=150,
+        max_tokens=220,  # safety ceiling only; brevity is enforced by the persona prompt, not this cap (120 chopped Hebrew mid-word)
         temperature=0.7,
         stream=True,
     )

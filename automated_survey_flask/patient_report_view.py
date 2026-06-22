@@ -53,10 +53,26 @@ def _extract_voice_breaks(pr):
     return _safe_float(vqs.get('degree_of_voice_breaks'))
 
 
+def _extract_net_talk(pr):
+    """Net patient speaking time (s) = total_duration * speaking_ratio.
+    speaking_ratio is the fraction of the recording that is actual voiced
+    speech (0..1), so the product is how long the patient actually talked.
+    This is the prosody-quality signal: clinical voice metrics need ~30-90s
+    of net speech to be reliable."""
+    if not isinstance(pr, dict):
+        return None
+    total = _extract_length(pr)
+    ratio = _safe_float(pr.get('speaking_ratio'))
+    if total is None or ratio is None:
+        return None
+    return total * ratio
+
+
 METRICS = [
-    ('pitch',        'Mean Pitch (Hz)',       _extract_pitch),
-    ('length',       'Call Length (s)',       _extract_length),
-    ('voice_breaks', 'Voice Breaks (%)',      _extract_voice_breaks),
+    ('pitch',        'Mean Pitch (Hz)',        _extract_pitch),
+    ('length',       'Call Length (s)',        _extract_length),
+    ('net_talk',     'Net Patient Speech (s)', _extract_net_talk),
+    ('voice_breaks', 'Voice Breaks (%)',       _extract_voice_breaks),
 ]
 
 
@@ -154,6 +170,7 @@ def patient_report_data(patient_id):
         .filter(Call.patient_phone == patient.phone)
         .filter(Call.is_processed == True)  # noqa: E712
         .filter(Call.prosody_results.isnot(None))
+        .filter(Call.recording_url.isnot(None))
         .order_by(Call.created_at.asc())
         .all()
     )

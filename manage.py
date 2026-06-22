@@ -239,9 +239,9 @@ def run_scheduled_calls():
                 to=patient.phone,
                 from_=TWILIO_NUMBER,
                 url=(
-                    f'{BASE_URL}/llm-voice?lang={patient.language}'
+                    f'{BASE_URL}/llm-relay-voice?lang={quote(patient.language)}'
                     f'&name={quote(patient.nickname or patient.name)}'
-                    f'&batch={patient.batch or "basic"}'
+                    f'&batch={quote(patient.batch or "basic")}'
                     f'&to_phone={quote(patient.phone)}'
                     f'&from_phone={quote(TWILIO_NUMBER)}'
                 ),

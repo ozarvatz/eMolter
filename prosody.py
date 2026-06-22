@@ -11,11 +11,30 @@ LOCK_FILE = '/tmp/prosody.lock'
 from parselmouth.praat import call
 from automated_survey_flask import app
 from automated_survey_flask.models import db, Call
-import torch
-import librosa
-from transformers import pipeline
 
-classifier = pipeline("audio-classification", model="harshit345/xlsr-wav2vec-speech-emotion-recognition")
+# Emotion/sentiment analysis uses a wav2vec2 XLSR transformer (~1.2GB RAM with
+# torch). On small hosts (e.g. the 512MB production droplet) loading it gets
+# OOM-killed ("Killed" with no traceback). It is therefore OPTIONAL and loaded
+# LAZILY: importing prosody.py and running with emotion disabled costs no extra
+# memory. Core prosody (pitch/jitter/shimmer/HNR/formants via Parselmouth) does
+# NOT need it. Enable only on a host with enough RAM:  PROSODY_EMOTION=1
+EMOTION_ENABLED = os.environ.get('PROSODY_EMOTION', '0') == '1'
+_classifier = None
+
+
+def _get_classifier():
+    """Lazily import torch/transformers and build the emotion pipeline on first
+    use. Heavy deps are imported here (not at module top) so prosody runs on
+    low-memory hosts when EMOTION_ENABLED is off."""
+    global _classifier
+    if _classifier is None:
+        import torch  # noqa: F401  (pulled in by transformers pipeline)
+        from transformers import pipeline
+        _classifier = pipeline(
+            "audio-classification",
+            model="harshit345/xlsr-wav2vec-speech-emotion-recognition",
+        )
+    return _classifier
 
 def parse_voice_report(report_str):
     """Converts the raw Praat text report into a dictionary."""
@@ -64,6 +83,44 @@ def get_voice_health_score(voice_stats):
     
     return round(max(0.0, min(score, 1.0)), 3)
 
+def _extract_speech_only(sound, intensity):
+    """Return a new Sound containing only the 'sounding' (non-silent) parts of
+    `sound`, concatenated end-to-end.
+
+    Why: the recording is one side of a turn-taking conversation, so the
+    patient's channel is silent (~half the call) while the bot talks and
+    between turns. Praat's `degree_of_voice_breaks` counts those silences as
+    voice breaks, massively inflating the metric — it ends up measuring
+    turn-taking, not voice pathology. Running the Voice report on speech-only
+    audio makes it measure breaks WITHIN the patient's speech instead.
+
+    Returns None if segmentation finds no speech or anything fails (caller then
+    falls back to the full-channel report). Pitch/jitter/shimmer/HNR are NOT
+    derived from this — Praat already ignores unvoiced frames for those."""
+    try:
+        # Silence threshold is dB below the channel's max (Praat default -25);
+        # min silent/sounding interval 0.1s avoids chopping on micro-gaps.
+        textgrid = call(intensity, "To TextGrid (silences)",
+                        -25.0, 0.1, 0.1, "silent", "sounding")
+        n_intervals = int(call(textgrid, "Get number of intervals", 1))
+        parts = []
+        for i in range(1, n_intervals + 1):
+            if call(textgrid, "Get label of interval", 1, i) == "sounding":
+                t0 = call(textgrid, "Get start time of interval", 1, i)
+                t1 = call(textgrid, "Get end time of interval", 1, i)
+                parts.append(call(sound, "Extract part", t0, t1,
+                                  "rectangular", 1.0, False))
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return call(parts, "Concatenate")
+    except Exception as e:
+        print(f"[prosody] speech-only extraction failed ({type(e).__name__}: {e}); "
+              f"voice breaks will use the full channel")
+        return None
+
+
 def analyze_emotions(audio_path, sr=16000, max_seconds=30):
     """
     Analyzes the emotional content of an audio recording using
@@ -84,10 +141,11 @@ def analyze_emotions(audio_path, sr=16000, max_seconds=30):
     *** The model was trained on a dataset called AESDD (Acted Emotional Speech Dynamic Database)
     """
     # 1. Load and Resample (duration cap prevents OOM on long full-call recordings)
+    import librosa  # lazy: only needed when emotion analysis is enabled
     speech, sr = librosa.load(audio_path, sr=16000, duration=max_seconds)
 
     # 2. Pass the 'speech' variable (the numbers) to the AI, not the file path
-    results = classifier(speech) 
+    results = _get_classifier()(speech)
 
     normal_result = {}
     for element in results:
@@ -177,7 +235,37 @@ def get_prosody_features(url, channel_index=1):
             # This generates the "everything" report (Jitter, Shimmer, HNR, etc.)
             raw_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
             features["voice_quality_stats"] = parse_voice_report(raw_report)
-            features["voice_health_score"] = get_voice_health_score(features["voice_quality_stats"])        
+
+            # Voice-break metrics from the full channel are inflated by the
+            # silences while the bot talks / between turns (see
+            # _extract_speech_only). Recompute them on speech-only audio so they
+            # measure breaks WITHIN the patient's speech, and overwrite just
+            # those keys. Jitter/shimmer/HNR stay from the full report (Praat
+            # already ignores unvoiced frames for them). The raw full-channel
+            # values are preserved under *_full_channel for transparency.
+            vqs = features["voice_quality_stats"]
+            vqs["voice_breaks_source"] = "full_channel"
+            speech_sound = _extract_speech_only(sound, intensity)
+            if speech_sound is not None:
+                try:
+                    speech_pitch  = speech_sound.to_pitch()
+                    speech_pulses = call([speech_sound, speech_pitch], "To PointProcess (cc)")
+                    speech_report = call([speech_sound, speech_pitch, speech_pulses],
+                                         "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
+                    speech_stats  = parse_voice_report(speech_report)
+                    for k in ("degree_of_voice_breaks",
+                              "number_of_voice_breaks",
+                              "fraction_of_locally_unvoiced_frames"):
+                        if k in vqs:
+                            vqs[k + "_full_channel"] = vqs[k]
+                        if k in speech_stats:
+                            vqs[k] = speech_stats[k]
+                    vqs["voice_breaks_source"] = "speech_only"
+                except Exception as e:
+                    print(f"[prosody] speech-only voice report failed "
+                          f"({type(e).__name__}: {e}); keeping full-channel breaks")
+
+            features["voice_health_score"] = get_voice_health_score(features["voice_quality_stats"])
             # --- Formants (Vocal Tract resonance) ---
             formant = sound.to_formant_burg()
             features["f1_mean_hz"] = call(formant, "Get mean", 1, 0, 0, "Hertz")
@@ -197,7 +285,12 @@ def get_prosody_features(url, channel_index=1):
                 features["speaking_ratio"] = 0.0
 
             features["total_duration"] = sound.get_total_duration()
-            features["sentiment"] = analyze_emotions(tmp_path, sr=16000)
+            # Emotion analysis is optional (heavy transformer model). Skipped
+            # unless PROSODY_EMOTION=1. See EMOTION_ENABLED at module top.
+            if EMOTION_ENABLED:
+                features["sentiment"] = analyze_emotions(tmp_path, sr=16000)
+            else:
+                features["sentiment"] = None
 
             return features
 

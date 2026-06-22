@@ -50,7 +50,7 @@
                     <th>Patient</th>
                     <th>Question ID</th>
                     <th>Status</th>
-                    <th>Length (s)</th>
+                    <th data-toggle="tooltip" title="Net patient speaking time = total recording duration × speaking ratio">Net Talk (s)</th>
                     <th>Pitch (Hz)</th>
                     <th>Voice Quality (HNR)</th>
                     <th>Shimmer (%)</th>
@@ -82,7 +82,14 @@
                             {% if dur is none and call.prosody_results.get('voice_quality_stats') %}
                                 {% set dur = call.prosody_results['voice_quality_stats'].get('from_0_to_0_seconds_duration') %}
                             {% endif %}
-                            {{ "%.1f"|format(dur) if dur is not none else '-' }}
+                            {% set ratio = call.prosody_results.get('speaking_ratio') %}
+                            {% if dur is not none and ratio is not none %}
+                                <span data-toggle="tooltip" title="total {{ "%.1f"|format(dur) }}s × speaking ratio {{ "%.0f"|format(ratio * 100) }}%">{{ "%.1f"|format(dur * ratio) }}</span>
+                            {% elif dur is not none %}
+                                <span class="text-muted" title="speaking_ratio missing — showing total duration">{{ "%.1f"|format(dur) }}</span>
+                            {% else %}
+                                -
+                            {% endif %}
                         {% else %}
                             <span class="text-muted">-</span>
                         {% endif %}

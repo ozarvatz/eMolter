@@ -50,10 +50,51 @@ from .llm_survey_view import (
 from .therapist_view import snapshot_patient_to_call
 from .topic_extractor import extract_topics
 
+# All call-flow diagnostics go through _log so every line carries a wall-clock
+# timestamp (HH:MM:SS.mmm). The bare print()s used to be un-timestamped, which
+# made it impossible to measure dead-air/silence between events from the log.
+_real_print = print
+
+
+def _log(*args, **kwargs):
+    ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    _real_print(ts, *args, **kwargs)
+
+
 # How often (in patient utterances) to re-run topic extraction during a live
 # call. 1 = every turn (Strategy B from the design). 3 = lighter (Strategy A).
 # Bump upward if Groq rate-limits or cost becomes an issue.
 TOPIC_EXTRACT_EVERY_N_TURNS = 1
+
+# Window after bot finishes speaking during which we treat any incoming
+# transcript as acoustic echo (bot audio bleeding through the patient's
+# phone) rather than a real patient response. Tune up if false positives
+# slip through; tune down if real fast responders get cut.
+ECHO_GUARD_SECONDS = 1.2
+
+# Turn-taking guard: Deepgram's UtteranceEnd/speech_final only measure the
+# gap since the last *finalized* word — they do NOT account for speech that
+# is still being transcribed (is_final=false interim Results). So while the
+# patient is actively talking, if Deepgram lags on finalizing, the end-of-turn
+# signal fires and the bot cuts in mid-sentence (observed cutting patients off
+# mid-count with zero actual pause). To avoid this, when an end-of-turn signal
+# arrives we ignore it if a non-empty interim Results was seen within the last
+# INTERIM_GRACE_SECONDS — the patient is still speaking; wait for those words
+# to finalize (or for a genuine silence gap with no pending interim).
+INTERIM_GRACE_SECONDS = 0.8
+
+# Topics the by_time extension flow is forbidden from steering toward, even
+# when the patient has mentioned them. Filtered out of `engagement_topics`
+# before being passed to the LLM.
+_EXTENSION_FORBIDDEN_TOPICS = {'suicidal_ideation', 'self_harm', 'substance_use'}
+
+
+def _engagement_topics(state):
+    """Patient topics this call may safely steer toward in extension mode.
+    Pulls from the latest topic-extractor result on `state['topics']` and
+    drops the safety set."""
+    pat = (state.get('topics') or {}).get('patient_topics') or []
+    return [t for t in pat if t not in _EXTENSION_FORBIDDEN_TOPICS]
 
 TWILIO_NUMBER      = "+17473023043"
 BASE_URL           = "https://www.emolter.org:5000"
@@ -118,7 +159,7 @@ def llm_relay_voice():
     to_phone     = request.args.get('to_phone', '')
     from_phone   = request.args.get('from_phone', TWILIO_NUMBER)
 
-    print(f"[LRV] /llm-relay-voice lang={lang!r} batch={batch!r} "
+    _log(f"[LRV] /llm-relay-voice lang={lang!r} batch={batch!r} "
           f"name={patient_name!r} to={to_phone!r}")
 
     base_qs = _get_base_questions(lang, batch)
@@ -184,7 +225,7 @@ def ws_media_stream():
     to_phone     = None
     from_phone   = None
     dg_lang      = None
-    print(f"[MS-WS] /ws/media-stream connected; awaiting start event for params")
+    _log(f"[MS-WS] /ws/media-stream connected; awaiting start event for params")
 
     # Shared state (mutable containers for greenlet access)
     state = {
@@ -194,10 +235,18 @@ def ws_media_stream():
         'history':     [],
         'q_num':       0,
         'bot_speaking': False,
+        # Persona key (LlmPrompt.name) picked by the QuestionSet for this
+        # call. None = fall back to the language's 'default' persona.
+        'prompt_name': None,
         # Pieces of the current utterance — accumulated as Deepgram sends
         # `is_final=true` Results; flushed to on_transcript on UtteranceEnd
         # (or speech_final, whichever arrives first).
         'utterance_parts': [],
+        # time.time() of the last non-empty interim (is_final=false) Results.
+        # Used to defer end-of-turn flushes while the patient is still
+        # talking but their words haven't been finalized yet. See
+        # INTERIM_GRACE_SECONDS.
+        'last_interim_at': 0.0,
         # Topic extraction state. `topics` is the latest dict
         # {"bot_topics": [...], "patient_topics": [...]} from the topic-
         # extractor thread; `topic_turn` counts patient answers since the
@@ -206,6 +255,16 @@ def ws_media_stream():
         # at end-of-call.
         'topics':      {},
         'topic_turn':  0,
+        # Net patient voiced-speech accumulator (seconds). Sum of
+        # (last_word.end − first_word.start) across all `is_final` Deepgram
+        # Results events. Used by by_time mode to decide when to end.
+        'net_seconds': 0.0,
+        # QuestionSet metadata cached at call start.
+        'qs_meta':     {},
+        # When the bot last finished speaking (time.time()). Transcripts
+        # arriving within ECHO_GUARD_SECONDS of this are discarded as
+        # acoustic echo — the patient's phone speaker bleeds into its mic.
+        'bot_done_at': 0.0,
     }
     dg_ws = [None]  # Deepgram WebSocket
 
@@ -213,7 +272,7 @@ def ws_media_stream():
         try:
             wsock.send(json.dumps(payload, ensure_ascii=False))
         except Exception as e:
-            print(f"[MS] send_to_twilio error: {e}")
+            _log(f"[MS] send_to_twilio error: {e}")
 
     def send_audio(audio_bytes):
         """Send mulaw bytes to Twilio in 20ms chunks (160 bytes each)."""
@@ -237,18 +296,27 @@ def ws_media_stream():
             t0 = time.time()
             topics = extract_topics(history_snapshot)
             state['topics'] = topics
-            print(f"[TOPICS] {(time.time()-t0)*1000:.0f}ms -> {topics}")
+            _log(f"[TOPICS] {(time.time()-t0)*1000:.0f}ms -> {topics}")
         except Exception as e:
-            print(f"[TOPICS] error: {type(e).__name__}: {e}")
+            _log(f"[TOPICS] error: {type(e).__name__}: {e}")
 
     def on_transcript(transcript):
         """Called from deepgram_receiver greenlet when a final transcript arrives."""
         if state['bot_speaking']:
-            print(f"[MS] ignoring transcript (bot speaking): '{transcript}'")
+            _log(f"[MS] ignoring transcript (bot speaking): '{transcript}'")
             return
+        # Echo guard: a transcript that lands within ECHO_GUARD_SECONDS of
+        # the bot finishing is almost certainly the patient's phone speaker
+        # bleeding our own TTS into the mic. Drop it.
+        if state['bot_done_at']:
+            since_bot = time.time() - state['bot_done_at']
+            if since_bot < ECHO_GUARD_SECONDS:
+                _log(f"[ECHO] dropped transcript {since_bot*1000:.0f}ms "
+                      f"after bot done: {transcript!r}")
+                return
 
         q_num = state['q_num']
-        print(f"[MS] transcript q{q_num}: '{transcript}'")
+        _log(f"[MS] transcript q{q_num}: '{transcript}'")
 
         history = state['history']
         if history and history[-1].get('a') == '':
@@ -277,19 +345,35 @@ def ws_media_stream():
                 cr.conversation_text = json.dumps(history, ensure_ascii=False)
                 db.session.commit()
 
-        # Survey complete
-        if q_num >= max_q:
+        # ---- End-of-call decision (by_count vs by_time) ----
+        qs_meta    = state.get('qs_meta') or {}
+        mode       = qs_meta.get('length_mode') or 'by_count'
+        target_s   = qs_meta.get('target_seconds') or 0
+        hard_cap   = qs_meta.get('max_questions') or max_q
+        net_s      = state.get('net_seconds', 0.0)
+
+        if mode == 'by_time':
+            # End when target speech reached OR hard cap of questions hit.
+            should_end = (net_s >= target_s) or (q_num >= hard_cap)
+            _log(f"[BYTIME] q_num={q_num}/{hard_cap} net={net_s:.1f}s "
+                  f"target={target_s}s end={should_end}")
+        else:
+            # Legacy by_count: end after all scripted questions are asked.
+            should_end = q_num >= max_q
+
+        if should_end:
             state['bot_speaking'] = True
             try:
                 thanks = _read(lang, batch, THANKS, "messages")
                 thanks_audio = _tts(thanks, lang, gender)
                 _save()
                 send_audio(thanks_audio)
-                # Pause so Twilio plays the goodbye before we close
                 duration = len(thanks_audio) / 8000.0
-                gevent.sleep(duration + 0.5)
+                _log(f"[MS] closing: thanks playback={duration*1000:.0f}ms "
+                     f"text={thanks!r} — sleeping then hanging up")
+                gevent.sleep(duration + 0.2)
             except Exception as e:
-                print(f"[MS] thanks TTS error: {e}")
+                _log(f"[MS] thanks TTS error: {e}")
             finally:
                 try:
                     wsock.close()
@@ -297,10 +381,37 @@ def ws_media_stream():
                     pass
             return
 
-        # Generate next question
+        # ---- Generate next question ----
         next_q_num = q_num + 1
         state['q_num'] = next_q_num
         state['bot_speaking'] = True
+
+        # Decide scripted vs extension. Extension fires only in by_time mode
+        # when scripted questions are exhausted but the time target isn't.
+        use_extension = (mode == 'by_time' and next_q_num > max_q)
+        if use_extension:
+            eng = _engagement_topics(state)
+            strategy = qs_meta.get('extension_strategy') or 'engagement'
+            if eng and strategy in ('engagement', 'mix'):
+                turn_instr = (
+                    "The scripted questions are done. Ask ONE short open-ended "
+                    "follow-up about something the patient has shown interest in. "
+                    "Use the engagement topics below for inspiration. Do NOT "
+                    "repeat any question already asked. Do NOT raise safety "
+                    "topics (suicidal ideation, self-harm, substance use)."
+                )
+            else:
+                turn_instr = (
+                    "The scripted questions are done. Ask ONE short open-ended "
+                    "follow-up that goes deeper on something the patient already "
+                    "said, or rephrases an earlier scripted question from a new "
+                    "angle. Do NOT repeat verbatim. Do NOT raise safety topics "
+                    "(suicidal ideation, self-harm, substance use)."
+                )
+            _log(f"[EXT] q{next_q_num} strategy={strategy} eng={eng}")
+        else:
+            eng = None
+            turn_instr = ''
         t_flush = time.time()
         total_audio_bytes = 0
 
@@ -309,22 +420,25 @@ def ws_media_stream():
             filler_audio = _tts(_get_filler(lang), lang, gender)
             send_audio(filler_audio)
             total_audio_bytes += len(filler_audio)
-            print(f"[TIMING MS] filler sent at +{(time.time()-t_flush)*1000:.0f}ms "
+            _log(f"[TIMING MS] filler sent at +{(time.time()-t_flush)*1000:.0f}ms "
                   f"({len(filler_audio)} bytes, ~{len(filler_audio)/8000*1000:.0f}ms playback)")
         except Exception as e:
-            print(f"[MS] filler TTS error: {e}")
+            _log(f"[MS] filler TTS error: {e}")
 
-        # LLM call (Groq)
+        # LLM call (Groq) — using the persona picked by the QuestionSet
         t0 = time.time()
         try:
-            next_q = _ask_llm(lang, batch, history, next_q_num, max_q, gender)
+            next_q = _ask_llm(lang, batch, history, next_q_num, max_q, gender,
+                              prompt_name=state['prompt_name'],
+                              turn_instruction=turn_instr,
+                              engagement_topics=eng)
         except Exception as e:
-            print(f"[MS] Groq error: {e}")
+            _log(f"[MS] Groq error: {e}")
             try:
                 next_q = _read(lang, batch, next_q_num, "questions").format(patient_name)
             except Exception:
                 next_q = ""
-        print(f"[TIMING MS] Groq: {(time.time()-t0)*1000:.1f}ms → '{next_q[:60]}'")
+        _log(f"[TIMING MS] Groq: {(time.time()-t0)*1000:.1f}ms len={len(next_q)} → '{next_q}'")
 
         history.append({"q": next_q, "a": ""})
         _save()
@@ -333,11 +447,11 @@ def ws_media_stream():
         t0 = time.time()
         try:
             q_audio = _tts(next_q, lang, gender)
-            print(f"[TIMING MS] TTS: {(time.time()-t0)*1000:.1f}ms ({len(q_audio)} bytes)")
+            _log(f"[TIMING MS] TTS: {(time.time()-t0)*1000:.1f}ms ({len(q_audio)} bytes)")
             send_audio(q_audio)
             total_audio_bytes += len(q_audio)
         except Exception as e:
-            print(f"[MS] question TTS error: {e}")
+            _log(f"[MS] question TTS error: {e}")
 
         # Hold bot_speaking=True until Twilio has played out the queued audio.
         # send_audio() queues the bytes near-instantly, but Twilio plays them
@@ -348,19 +462,29 @@ def ws_media_stream():
         playback_s = total_audio_bytes / 8000.0
         elapsed_s  = time.time() - t_flush
         wait_s     = max(0.0, playback_s - elapsed_s)
-        print(f"[TIMING MS] question sent at +{(time.time()-t_flush)*1000:.0f}ms; "
+        _log(f"[TIMING MS] question sent at +{(time.time()-t_flush)*1000:.0f}ms; "
               f"total_audio_bytes={total_audio_bytes}, "
               f"playback={playback_s*1000:.0f}ms, waiting {wait_s*1000:.0f}ms before unmute")
         if wait_s > 0:
             gevent.sleep(wait_s)
         state['bot_speaking'] = False
-        print(f"[TIMING MS] bot done speaking at +{(time.time()-t_flush)*1000:.0f}ms")
+        state['bot_done_at']  = time.time()
+        _log(f"[TIMING MS] bot done speaking at +{(time.time()-t_flush)*1000:.0f}ms")
 
     def _flush_utterance(reason):
         """Concatenate buffered final pieces and hand them to on_transcript.
         Called when Deepgram signals end of utterance (UtteranceEnd, or a
         Results event with speech_final=true). Safe to call when buffer
         is empty — silently no-ops."""
+        # Don't cut the patient off mid-sentence: if a non-empty interim
+        # Results arrived within INTERIM_GRACE_SECONDS, they're still talking
+        # and Deepgram simply hasn't finalized those words yet. Skip this
+        # end-of-turn signal; Deepgram re-emits UtteranceEnd once the speech
+        # finalizes and a genuine gap follows.
+        since_interim = time.time() - state['last_interim_at']
+        if since_interim < INTERIM_GRACE_SECONDS:
+            _log(f"[TURN] defer flush ({reason}); interim {since_interim*1000:.0f}ms ago — still talking")
+            return
         parts = state['utterance_parts']
         if not parts:
             return
@@ -368,8 +492,28 @@ def ws_media_stream():
         state['utterance_parts'] = []
         if not full:
             return
-        print(f"[DG] flush ({reason}): {full!r}")
+        _log(f"[DG] flush ({reason}): {full!r}")
         on_transcript(full)
+
+    def deepgram_keepalive():
+        """Send a periodic KeepAlive frame so Deepgram doesn't drop the
+        connection during long bot-speech segments.
+
+        Deepgram closes idle streaming connections after ~10 s of no audio.
+        While `bot_speaking=True` we stop forwarding media to Deepgram, so
+        long TTS playback (anything >~10 s) was killing the call:
+            connection drops → subsequent patient audio fails to reach STT
+            → no transcript arrives → the call hangs.
+        Send every 5 s to stay safely under the threshold."""
+        while True:
+            try:
+                gevent.sleep(5)
+                if dg_ws[0] is None:
+                    return
+                dg_ws[0].send(json.dumps({"type": "KeepAlive"}))
+            except Exception as e:
+                _log(f"[DG] keepalive stopped: {type(e).__name__}: {e}")
+                return
 
     def deepgram_receiver():
         """Greenlet: reads events from Deepgram and advances the survey on
@@ -391,7 +535,7 @@ def ws_media_stream():
                     # treat any falsy payload as a normal close signal so we
                     # don't log a spurious JSON decode error on shutdown.
                     if not raw:
-                        print("[DG] recv: empty frame — connection closed")
+                        _log("[DG] recv: empty frame — connection closed")
                         break
                     data = json.loads(raw)
                     ev_type = data.get('type')
@@ -400,21 +544,37 @@ def ws_media_stream():
                         transcript = (alts[0].get('transcript', '') if alts else '').strip()
                         is_final     = bool(data.get('is_final'))
                         speech_final = bool(data.get('speech_final'))
-                        print(f"[DG] Results is_final={is_final} "
+                        _log(f"[DG] Results is_final={is_final} "
                               f"speech_final={speech_final} text={transcript!r}")
+                        if (not is_final) and transcript:
+                            # Patient is actively talking — words not yet
+                            # finalized. Mark so a near-simultaneous
+                            # UtteranceEnd/speech_final won't cut them off.
+                            state['last_interim_at'] = time.time()
                         if is_final and transcript:
                             state['utterance_parts'].append(transcript)
+                            # Accumulate net voiced patient speech from the
+                            # word-level timestamps in this final segment.
+                            words = alts[0].get('words') if alts else None
+                            if words:
+                                try:
+                                    dur = float(words[-1].get('end', 0)) - float(words[0].get('start', 0))
+                                    if dur > 0:
+                                        state['net_seconds'] += dur
+                                        _log(f"[NET] +{dur:.2f}s total={state['net_seconds']:.2f}s")
+                                except (TypeError, ValueError, IndexError):
+                                    pass
                         if speech_final:
                             _flush_utterance('speech_final')
                     elif ev_type == 'UtteranceEnd':
-                        print(f"[DG] UtteranceEnd last_word_end={data.get('last_word_end')}")
+                        _log(f"[DG] UtteranceEnd last_word_end={data.get('last_word_end')}")
                         _flush_utterance('UtteranceEnd')
                     elif ev_type == 'SpeechStarted':
-                        print(f"[DG] SpeechStarted timestamp={data.get('timestamp')}")
+                        _log(f"[DG] SpeechStarted timestamp={data.get('timestamp')}")
                     else:
-                        print(f"[DG] {ev_type or 'unknown'}: {str(data)[:200]}")
+                        _log(f"[DG] {ev_type or 'unknown'}: {str(data)[:200]}")
                 except Exception as e:
-                    print(f"[DG] recv error: {e}")
+                    _log(f"[DG] recv error: {e}")
                     break
 
     try:
@@ -429,7 +589,7 @@ def ws_media_stream():
             # `media` arrives every 20ms (50/s); never log it. Log everything
             # else so we still see connected/start/mark/stop in order.
             if event != 'media':
-                print(f"[MS {datetime.now().strftime('%H:%M:%S')}] {event}")
+                _log(f"[MS {datetime.now().strftime('%H:%M:%S')}] {event}")
 
             if event == 'connected':
                 pass
@@ -456,7 +616,7 @@ def ws_media_stream():
                 # Fail loudly if the DB-derived params didn't arrive — better
                 # than silently defaulting to Hebrew and confusing the patient.
                 if not lang or not batch or max_q is None:
-                    print(f"[MS] start FATAL: missing customParameters — "
+                    _log(f"[MS] start FATAL: missing customParameters — "
                           f"lang={lang!r} batch={batch!r} max_q={max_q!r} "
                           f"name={patient_name!r}. Closing.")
                     try:
@@ -467,7 +627,7 @@ def ws_media_stream():
 
                 dg_lang = _LANG_TO_DG.get(lang)
                 if not dg_lang:
-                    print(f"[MS] start FATAL: lang={lang!r} has no Deepgram "
+                    _log(f"[MS] start FATAL: lang={lang!r} has no Deepgram "
                           f"mapping in _LANG_TO_DG. Closing.")
                     try:
                         wsock.close()
@@ -475,9 +635,21 @@ def ws_media_stream():
                         pass
                     return
 
-                print(f"[MS] start stream_sid={state['stream_sid']} "
+                # Load QuestionSet metadata (persona + length controls) for
+                # this (lang, batch). Cached on state so all subsequent turns
+                # use the same persona even if the QS is edited mid-call.
+                from automated_survey_flask.question_service import get_question_set_meta
+                qs_meta = get_question_set_meta(lang, batch)
+                state['qs_meta']     = qs_meta
+                state['prompt_name'] = qs_meta.get('prompt_name')
+
+                _log(f"[MS] start stream_sid={state['stream_sid']} "
                       f"call_sid={state['call_sid']} lang={lang!r} batch={batch!r} "
-                      f"max_q={max_q} name={patient_name!r} dg_lang={dg_lang!r}")
+                      f"max_q={max_q} name={patient_name!r} dg_lang={dg_lang!r} "
+                      f"persona={state['prompt_name'] or 'default'} "
+                      f"mode={qs_meta.get('length_mode')} "
+                      f"target={qs_meta.get('target_seconds')} "
+                      f"cap={qs_meta.get('max_questions')}")
 
                 # Create DB record
                 call_record = Call.query.filter_by(
@@ -511,14 +683,15 @@ def ws_media_stream():
                 #                           nova-3. 1000 is Deepgram's documented
                 #                           minimum — values <1000 return 400
                 #                           Bad Request (confirmed 2026-05-26).
-                #   endpointing=300       → flags `speech_final` on the final
+                #   endpointing=700       → flags `speech_final` on the final
                 #                           Results, the faster primary signal.
-                #                           Lowered from 500ms to make the fast
-                #                           path fire more often / sooner.
-                #                           Risk: mid-sentence breath pauses of
-                #                           >300ms could prematurely close the
-                #                           utterance; revisit if patients are
-                #                           getting cut off.
+                #                           Bumped from 300ms → 700ms after
+                #                           reports of the bot cutting patients
+                #                           off mid-sentence on natural breath
+                #                           pauses. Tune up further (900–1100)
+                #                           for very slow speakers (elderly,
+                #                           distressed); tune down for snappier
+                #                           turns if cutting-off resurfaces.
                 # The receiver buffers `is_final=true` Results and advances
                 # the survey on whichever end signal arrives first.
                 dg_url = (
@@ -527,7 +700,7 @@ def ws_media_stream():
                     f"&encoding=mulaw&sample_rate=8000"
                     f"&language={dg_lang}"
                     f"&interim_results=true"
-                    f"&endpointing=300"
+                    f"&endpointing=1000"
                     f"&utterance_end_ms=1000"
                 )
                 try:
@@ -536,14 +709,15 @@ def ws_media_stream():
                         header=[f"Authorization: Token {DEEPGRAM_API_KEY}"],
                     )
                 except Exception as e:
-                    print(f"[MS] Deepgram connect FAILED ({type(e).__name__}): {e}")
-                    print(f"[MS] dg_url was: {dg_url}")
+                    _log(f"[MS] Deepgram connect FAILED ({type(e).__name__}): {e}")
+                    _log(f"[MS] dg_url was: {dg_url}")
                     try:
                         wsock.close()
                     except Exception:
                         pass
                     return
                 gevent.spawn(deepgram_receiver)
+                gevent.spawn(deepgram_keepalive)
 
                 # Send greeting
                 state['bot_speaking'] = True
@@ -563,11 +737,12 @@ def ws_media_stream():
                     greeting_audio = _tts(greeting, lang, gender)
                     send_audio(greeting_audio)
                 except Exception as e:
-                    print(f"[MS] greeting error: {e}")
+                    _log(f"[MS] greeting error: {e}")
                 finally:
                     state['bot_speaking'] = False
+                    state['bot_done_at']  = time.time()
 
-                print(f"[MS] greeting sent, q_num=1")
+                _log(f"[MS] greeting sent, q_num=1")
 
             elif event == 'media':
                 if not state['bot_speaking'] and dg_ws[0]:
@@ -575,20 +750,20 @@ def ws_media_stream():
                         payload = base64.b64decode(msg['media']['payload'])
                         dg_ws[0].send_binary(payload)
                     except Exception as e:
-                        print(f"[MS] dg send error: {e}")
+                        _log(f"[MS] dg send error: {e}")
 
             elif event == 'stop':
-                print(f"[MS] stop")
+                _log(f"[MS] stop")
                 break
 
             elif event == 'mark':
-                print(f"[MS] mark: {msg.get('mark', {}).get('name')}")
+                _log(f"[MS] mark: {msg.get('mark', {}).get('name')}")
 
     except WebSocketError as e:
-        print(f"[MS] WebSocketError: {e}")
+        _log(f"[MS] WebSocketError: {e}")
     except Exception as e:
         import traceback
-        print(f"[MS] ERROR: {e}")
+        _log(f"[MS] ERROR: {e}")
         traceback.print_exc()
     finally:
         if dg_ws[0]:
@@ -604,10 +779,10 @@ def ws_media_stream():
             if cr and state['topics']:
                 cr.topics = state['topics']
                 db.session.commit()
-                print(f"[TOPICS] persisted on close: {state['topics']}")
+                _log(f"[TOPICS] persisted on close: {state['topics']}")
         except Exception as e:
-            print(f"[TOPICS] persist error: {e}")
-        print(f"[MS] connection closed call_sid={state['call_sid']}")
+            _log(f"[TOPICS] persist error: {e}")
+        _log(f"[MS] connection closed call_sid={state['call_sid']}")
 
     return Response('', status=200)
 
@@ -632,7 +807,7 @@ def patient_relay_call(id):
     # Call snapshot — no defaults along the way.
     lang  = patient.language
     batch = patient.batch or 'basic'
-    print(f"[PRC] patient.id={patient.id} name={patient.name!r} "
+    _log(f"[PRC] patient.id={patient.id} name={patient.name!r} "
           f"language={lang!r} batch={batch!r} gender={patient.gender!r} "
           f"birth_year={patient.birth_year!r} treatment={patient.treatment!r}")
 

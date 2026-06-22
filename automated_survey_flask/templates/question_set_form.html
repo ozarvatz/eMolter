@@ -13,24 +13,43 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
 
     <div class="row">
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="form-group">
                 <label>Batch *</label>
                 <input type="text" class="form-control" name="batch"
                        value="{{ qs.batch if qs else '' }}" required placeholder="e.g. zeev4">
             </div>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="form-group">
                 <label>Language *</label>
-                <select class="form-control" name="lang">
+                <select class="form-control" name="lang" id="qs-lang" onchange="onLangChange()">
                     {% for code, label in [('he-IL','Hebrew'), ('en-US','English'), ('de-DE','German')] %}
                     <option value="{{ code }}" {{ 'selected' if qs and qs.lang == code else '' }}>{{ label }} ({{ code }})</option>
                     {% endfor %}
                 </select>
             </div>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
+            <div class="form-group">
+                <label>Prompt (persona)</label>
+                <select class="form-control" name="prompt_name" id="qs-prompt-name">
+                    {# Options injected by JS based on selected language.
+                       Server renders the currently-selected one as a fallback
+                       so the form still works without JS. #}
+                    <option value="" {{ 'selected' if not qs or not qs.prompt_name else '' }}>
+                        (use language default)
+                    </option>
+                    {% if qs and qs.prompt_name %}
+                        <option value="{{ qs.prompt_name }}" selected>{{ qs.prompt_name }}</option>
+                    {% endif %}
+                </select>
+                <small class="text-muted">
+                    Edit prompts at <a href="{{ url_for('prompt_list') }}">/admin/prompts</a>.
+                </small>
+            </div>
+        </div>
+        <div class="col-md-3">
             <div class="form-group">
                 <label>Title</label>
                 <input type="text" class="form-control" name="title"
@@ -78,10 +97,81 @@
         </div>
     </div>
 
+    <h4 style="margin-top:20px;">Call Length</h4>
+    <div class="well well-sm">
+        <div class="form-group">
+            <label class="radio-inline">
+                <input type="radio" name="length_mode" value="by_count"
+                       {{ 'checked' if not qs or qs.length_mode == 'by_count' else '' }}
+                       onchange="onLengthModeChange()">
+                End after all scripted questions are asked
+            </label>
+            <label class="radio-inline" style="margin-left:25px;">
+                <input type="radio" name="length_mode" value="by_time"
+                       {{ 'checked' if qs and qs.length_mode == 'by_time' else '' }}
+                       onchange="onLengthModeChange()">
+                End by net patient speech time
+            </label>
+        </div>
+
+        <div id="by_time_controls" style="display:none; margin-top:10px;">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="target_seconds">
+                            Target net patient speech:
+                            <span id="target_seconds_value" style="font-weight:bold;">{{ qs.target_seconds if qs and qs.target_seconds else 60 }}</span> s
+                        </label>
+                        <input type="range" min="10" max="300" step="5"
+                               name="target_seconds" id="target_seconds"
+                               value="{{ qs.target_seconds if qs and qs.target_seconds else 60 }}"
+                               oninput="document.getElementById('target_seconds_value').textContent = this.value;">
+                        <small class="text-muted">
+                            Literature suggests 30–90 s of NET patient speech for reliable prosody
+                            (jitter / shimmer / HNR). Below 30 s these metrics become unreliable.
+                        </small>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-group">
+                        <label for="extension_strategy">
+                            When scripted questions run out before time is reached, the LLM should:
+                        </label>
+                        <select class="form-control" name="extension_strategy" id="extension_strategy">
+                            <option value="engagement" {{ 'selected' if qs and qs.extension_strategy == 'engagement' else '' }}>
+                                Invent follow-ups about the patient's engagement topics
+                            </option>
+                            <option value="rephrase" {{ 'selected' if qs and qs.extension_strategy == 'rephrase' else '' }}>
+                                Rephrase earlier scripted questions
+                            </option>
+                            <option value="mix" {{ 'selected' if qs and qs.extension_strategy == 'mix' else '' }}>
+                                Mix: engagement when patient has topics, rephrase otherwise
+                            </option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-top:10px;">
+            <label for="max_questions">Maximum questions (safety cap):</label>
+            <input type="number" class="form-control" name="max_questions" id="max_questions"
+                   min="1" max="100" style="width:120px; display:inline-block;"
+                   value="{{ qs.max_questions if qs else 10 }}">
+            <small class="text-muted" style="margin-left:10px;">
+                The call will always end after this many questions, even if the time target hasn't been reached.
+            </small>
+        </div>
+    </div>
+
     <h4 style="margin-top:20px;">Questions
         <button type="button" class="btn btn-sm btn-success" onclick="addQuestion()" style="margin-left:10px;">
             + Add Question
         </button>
+        <a href="#" data-toggle="modal" data-target="#openEndedTipsModal"
+           class="btn btn-sm btn-link" style="margin-left:6px;">
+           Tip: writing open-ended questions
+        </a>
     </h4>
     <div id="questions-container">
         {% for q in questions %}
@@ -96,6 +186,36 @@
         {% endfor %}
     </div>
 
+    <!-- Open-ended question writing tips modal -->
+    <div class="modal fade" id="openEndedTipsModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title">Writing open-ended questions</h4>
+                </div>
+                <div class="modal-body">
+                    <p>Open-ended questions elicit longer answers — which gives prosody analysis enough net speech to be reliable (≥30 s).</p>
+                    <p><strong>Pattern</strong>: start with <em>"Tell me about"</em>, <em>"Walk me through"</em>, <em>"How"</em>, or <em>"What"</em>. Avoid starting with <em>"Are"</em>, <em>"Did"</em>, <em>"Do"</em>, <em>"Is"</em>, <em>"Will"</em>.</p>
+                    <table class="table table-condensed table-bordered">
+                        <thead>
+                            <tr><th>❌ Closed (yes/no, one word)</th><th>✅ Open-ended (elicits 20+ seconds)</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Did you sleep well?</td><td>Tell me about how last night went.</td></tr>
+                            <tr><td>Are you feeling okay?</td><td>How has your week been so far?</td></tr>
+                            <tr><td>Do you have energy today?</td><td>What did you get up to yesterday?</td></tr>
+                            <tr><td>Are you eating?</td><td>Walk me through your meals today.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Got it</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div style="margin-top:20px;">
         <button type="submit" class="btn btn-primary">{{ 'Update' if qs else 'Create' }}</button>
         <a href="{{ url_for('question_set_list') }}" class="btn btn-default">Cancel</a>
@@ -105,6 +225,51 @@
 
 {% block scripts %}
 <script>
+function onLengthModeChange() {
+    var mode = document.querySelector('input[name="length_mode"]:checked').value;
+    document.getElementById('by_time_controls').style.display =
+        (mode === 'by_time') ? '' : 'none';
+}
+document.addEventListener('DOMContentLoaded', onLengthModeChange);
+
+// Prompt names available per language (server-injected JSON).
+var PROMPT_NAMES_BY_LANG = {{ prompt_names_by_lang|tojson }};
+var CURRENT_QS_PROMPT_NAME = {{ (qs.prompt_name if qs and qs.prompt_name else '')|tojson }};
+
+function onLangChange() {
+    var lang   = document.getElementById('qs-lang').value;
+    var select = document.getElementById('qs-prompt-name');
+    var names  = PROMPT_NAMES_BY_LANG[lang] || [];
+
+    // Preserve the currently-selected value across language switches if it's
+    // still available for the new language; otherwise fall back to "default".
+    var current = select.value;
+
+    // Rebuild the option list.
+    select.innerHTML = '';
+    var optDefault = document.createElement('option');
+    optDefault.value = '';
+    optDefault.textContent = '(use language default)';
+    select.appendChild(optDefault);
+    names.forEach(function(n) {
+        var o = document.createElement('option');
+        o.value = n;
+        o.textContent = n;
+        select.appendChild(o);
+    });
+
+    // Restore selection if possible.
+    if (current && (current === '' || names.indexOf(current) >= 0)) {
+        select.value = current;
+    } else if (CURRENT_QS_PROMPT_NAME &&
+               names.indexOf(CURRENT_QS_PROMPT_NAME) >= 0) {
+        select.value = CURRENT_QS_PROMPT_NAME;
+    } else {
+        select.value = '';
+    }
+}
+document.addEventListener('DOMContentLoaded', onLangChange);
+
 var questionCount = {{ questions|length }};
 
 function addQuestion() {

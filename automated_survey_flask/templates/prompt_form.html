@@ -12,13 +12,32 @@
 <form method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
 
-    <div class="form-group">
-        <label for="lang">Language *</label>
-        <select class="form-control" id="lang" name="lang" required>
-            {% for code, label in supported_langs %}
-                <option value="{{ code }}" {{ 'selected' if prompt and prompt.lang == code else '' }}>{{ label }} ({{ code }})</option>
-            {% endfor %}
-        </select>
+    <div class="row">
+        <div class="col-md-6">
+            <div class="form-group">
+                <label for="lang">Language *</label>
+                <select class="form-control" id="lang" name="lang" required>
+                    {% for code, label in supported_langs %}
+                        <option value="{{ code }}" {{ 'selected' if prompt and prompt.lang == code else '' }}>{{ label }} ({{ code }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+                <label for="name">Persona name *</label>
+                <input type="text" class="form-control" id="name" name="name"
+                       value="{{ prompt.name if prompt else 'default' }}"
+                       pattern="[a-z0-9_-]+"
+                       title="lowercase letters, digits, hyphens, underscores only"
+                       placeholder="default" required>
+                <small class="text-muted">
+                    Identifier used by QuestionSets to pick this prompt — e.g.
+                    <code>default</code>, <code>clinical_warm</code>, <code>elderly_companion</code>.
+                    One per (lang, name).
+                </small>
+            </div>
+        </div>
     </div>
 
     <div class="form-group">
@@ -51,7 +70,8 @@
     <div class="checkbox">
         <label>
             <input type="checkbox" name="active" {{ 'checked' if prompt and prompt.active else '' }}>
-            Active (will deactivate any other prompt for the same language)
+            Active (will deactivate other versions of this same persona for this language;
+            other personas are unaffected)
         </label>
     </div>
 

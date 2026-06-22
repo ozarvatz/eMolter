@@ -194,23 +194,57 @@ class QuestionSet(db.Model):
     """Stores survey question sets, keyed by (batch, lang). Replaces JSON files."""
     __tablename__ = 'question_sets'
 
-    id            = db.Column(db.Integer, primary_key=True)
-    batch         = db.Column(db.String(50), nullable=False)
-    lang          = db.Column(db.String(10), nullable=False)
-    content       = db.Column(db.JSON, nullable=False)
-    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    created_at    = db.Column(db.DateTime, default=db.func.now())
-    updated_at    = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+    # length_mode controls how the call ends:
+    #   'by_count' — end after the scripted questions are exhausted (legacy behavior)
+    #   'by_time'  — end when net patient speech reaches target_seconds, OR when
+    #                max_questions is reached, whichever comes first. When the
+    #                scripted questions run out before the time target, the LLM
+    #                invents follow-ups per `extension_strategy`.
+    LENGTH_BY_COUNT = 'by_count'
+    LENGTH_BY_TIME  = 'by_time'
+
+    # extension_strategy choices (only used in by_time mode after scripted questions exhaust):
+    EXT_ENGAGEMENT = 'engagement'  # ask more about patient's non-safety topics
+    EXT_REPHRASE   = 'rephrase'    # rephrase earlier scripted questions
+    EXT_MIX        = 'mix'         # engagement if patient has any topics, else rephrase
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    batch              = db.Column(db.String(50), nullable=False)
+    lang               = db.Column(db.String(10), nullable=False)
+    content            = db.Column(db.JSON, nullable=False)
+    # Persona selector — matches LlmPrompt.name. Null = use that lang's
+    # 'default' persona (today's behavior for existing question sets).
+    prompt_name        = db.Column(db.String(50), nullable=True)
+    length_mode        = db.Column(db.String(20), nullable=False, default=LENGTH_BY_COUNT)
+    target_seconds     = db.Column(db.Integer, nullable=True)
+    max_questions      = db.Column(db.Integer, nullable=False, default=10)
+    extension_strategy = db.Column(db.String(20), nullable=False, default=EXT_ENGAGEMENT)
+    created_by_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at         = db.Column(db.DateTime, default=db.func.now())
+    updated_at         = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
     __table_args__ = (
         db.UniqueConstraint('batch', 'lang', name='uq_question_set_batch_lang'),
     )
 
-    def __init__(self, batch, lang, content, created_by_id=None):
-        self.batch         = batch
-        self.lang          = lang
-        self.content       = content
-        self.created_by_id = created_by_id
+    def __init__(self, batch, lang, content, created_by_id=None,
+                 length_mode=None, target_seconds=None,
+                 max_questions=None, extension_strategy=None,
+                 prompt_name=None):
+        self.batch              = batch
+        self.lang               = lang
+        self.content            = content
+        self.created_by_id      = created_by_id
+        self.prompt_name        = prompt_name  # null = default persona for lang
+        # Defaults match the column defaults; pass-through allows callers to override.
+        if length_mode is not None:
+            self.length_mode = length_mode
+        if target_seconds is not None:
+            self.target_seconds = target_seconds
+        if max_questions is not None:
+            self.max_questions = max_questions
+        if extension_strategy is not None:
+            self.extension_strategy = extension_strategy
 
     def get_item(self, entity, n):
         """Return body of nth item (1-based) from entity ('questions','messages','config')."""
@@ -251,15 +285,34 @@ class CallSchedule(db.Model):
         if self.last_run_at is None:
             return True
         days_needed = self.FREQUENCY_DAYS.get(self.frequency, 0)
-        return (now - self.last_run_at).days >= days_needed
+        # Compare by CALENDAR DATE, not elapsed time. last_run_at is stamped
+        # with the wall-clock instant the previous run fired (e.g. 08:00:05,
+        # after the Twilio call + commit), so an elapsed-time check
+        # ((now - last_run_at).days >= 1) needs a *full* 24h and skips a day
+        # whenever today's cron fires even a few seconds earlier than the
+        # previous run's timestamp. Date math fires once per Nth calendar day
+        # at the scheduled hour, regardless of sub-minute jitter.
+        return (now.date() - self.last_run_at.date()).days >= days_needed
 
 
 class LlmPrompt(db.Model):
-    """Per-language LLM system+user prompt templates. Only one row per lang has active=True."""
+    """Per-language LLM system+user prompt templates ("personas").
+
+    Multiple named prompts can coexist per language. A QuestionSet picks one
+    by `name` (via QuestionSet.prompt_name). When QuestionSet.prompt_name is
+    null, the call falls back to the prompt named 'default' for that language.
+
+    `active` distinguishes the current production version of a given
+    (lang, name) pair from older drafts. Only one row per (lang, name) is
+    active at a time.
+    """
     __tablename__ = 'llm_prompts'
+
+    DEFAULT_NAME = 'default'
 
     id                     = db.Column(db.Integer, primary_key=True)
     lang                   = db.Column(db.String(10), nullable=False)
+    name                   = db.Column(db.String(50), nullable=False, default=DEFAULT_NAME)
     system_template        = db.Column(db.Text, nullable=False)
     user_template_first    = db.Column(db.Text, nullable=False)
     user_template_followup = db.Column(db.Text, nullable=False)
@@ -270,12 +323,36 @@ class LlmPrompt(db.Model):
     updated_by_id          = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
     __table_args__ = (
+        db.UniqueConstraint('lang', 'name', name='uq_llm_prompts_lang_name'),
         db.Index('ix_llm_prompts_lang_active', 'lang', 'active'),
     )
 
     @classmethod
-    def active_for(cls, lang):
-        return cls.query.filter_by(lang=lang, active=True).first()
+    def active_for(cls, lang, name=None):
+        """Return the active prompt for (lang, name).
+
+        - `name=None`        → look up the 'default' persona for `lang`.
+        - `name='whatever'`  → look up that exact persona for `lang`.
+
+        Returns None if no matching active row exists. Callers should fall
+        back to the default when a named persona is missing.
+        """
+        target_name = name or cls.DEFAULT_NAME
+        return cls.query.filter_by(lang=lang, name=target_name, active=True).first()
+
+    @classmethod
+    def available_names_for(cls, lang):
+        """List of active prompt names available for a language, default first."""
+        rows = (cls.query
+                .filter_by(lang=lang, active=True)
+                .order_by(cls.name)
+                .all())
+        names = [r.name for r in rows]
+        # Surface 'default' first if present, then the rest alphabetically.
+        if cls.DEFAULT_NAME in names:
+            names.remove(cls.DEFAULT_NAME)
+            names.insert(0, cls.DEFAULT_NAME)
+        return names
 
 
 class ProsodyParameter(db.Model):

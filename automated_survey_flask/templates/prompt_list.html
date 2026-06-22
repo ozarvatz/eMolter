@@ -3,7 +3,12 @@
 
 {% block content %}
 <h1>LLM Prompts</h1>
-<p class="text-muted">Per-language prompts used by the Groq LLM. Only one prompt per language can be <strong>active</strong> at a time.</p>
+<p class="text-muted">
+    Per-language prompt personas used by the Groq LLM. Each persona is identified by a <strong>name</strong>
+    (e.g. <code>default</code>, <code>clinical_warm</code>, <code>elderly_companion</code>).
+    A QuestionSet picks which persona to use. Only one row per (language, name) can be <strong>active</strong>
+    — that's the currently-deployed version of that persona.
+</p>
 <a href="{{ url_for('prompt_new') }}" class="btn btn-primary" style="margin-bottom: 15px;">New Prompt</a>
 
 <table class="table table-striped">
@@ -11,6 +16,7 @@
         <tr>
             <th>ID</th>
             <th>Language</th>
+            <th>Name</th>
             <th>Active</th>
             <th>Notes</th>
             <th>Updated</th>
@@ -22,6 +28,7 @@
         <tr>
             <td>{{ p.id }}</td>
             <td>{{ p.lang }}</td>
+            <td><code>{{ p.name }}</code></td>
             <td>
                 {% if p.active %}
                     <span class="label label-success">Active</span>
@@ -47,7 +54,7 @@
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="6">No prompts yet.</td></tr>
+        <tr><td colspan="7">No prompts yet.</td></tr>
         {% endfor %}
     </tbody>
 </table>

@@ -72,7 +72,12 @@ def therapist_delete(id):
 @login_required
 @superuser_required
 def prompt_list():
-    prompts = LlmPrompt.query.order_by(LlmPrompt.lang, LlmPrompt.active.desc(), LlmPrompt.updated_at.desc()).all()
+    prompts = LlmPrompt.query.order_by(
+        LlmPrompt.lang,
+        LlmPrompt.name,
+        LlmPrompt.active.desc(),
+        LlmPrompt.updated_at.desc(),
+    ).all()
     return render_template(
         'prompt_list.html',
         prompts=prompts,
@@ -114,11 +119,13 @@ def prompt_edit(id):
 @superuser_required
 def prompt_activate(id):
     prompt = LlmPrompt.query.get_or_404(id)
-    LlmPrompt.query.filter_by(lang=prompt.lang).update({'active': False})
+    # Deactivate any other row with the SAME (lang, name) — i.e. only one
+    # active version of each persona, not one active per lang globally.
+    LlmPrompt.query.filter_by(lang=prompt.lang, name=prompt.name).update({'active': False})
     prompt.active = True
     prompt.updated_by_id = current_user.id
     db.session.commit()
-    flash(f'Activated prompt #{prompt.id} for {prompt.lang}', 'success')
+    flash(f'Activated prompt #{prompt.id} ({prompt.lang} / {prompt.name})', 'success')
     return redirect(url_for('prompt_list'))
 
 
@@ -137,8 +144,10 @@ def prompt_delete(id):
 
 
 def _save_prompt(prompt):
-    """Shared create/update logic. If activating, deactivate all others for the same lang."""
+    """Shared create/update logic. If activating, deactivate other rows with
+    the same (lang, name) — only one active version per persona."""
     lang   = request.form.get('lang', '').strip()
+    name   = (request.form.get('name', '').strip() or LlmPrompt.DEFAULT_NAME)
     system = request.form.get('system_template', '')
     first  = request.form.get('user_template_first', '')
     follow = request.form.get('user_template_followup', '')
@@ -149,11 +158,27 @@ def _save_prompt(prompt):
         flash('Language and all three templates are required.', 'error')
         return redirect(request.url)
 
+    # Lightweight name validation — kebab/snake-case + digits, no spaces or
+    # weird chars. Keeps URLs and dropdowns clean.
+    import re as _re
+    if not _re.match(r'^[a-z0-9_-]+$', name):
+        flash('Prompt name must be lowercase letters, digits, hyphens, or underscores only.', 'error')
+        return redirect(request.url)
+
+    # (lang, name) uniqueness — enforced by the DB, but check explicitly so
+    # we can return a friendly message instead of an IntegrityError.
+    existing = LlmPrompt.query.filter_by(lang=lang, name=name).first()
+    if existing and (prompt is None or existing.id != prompt.id):
+        flash(f'A prompt named "{name}" already exists for {lang}. '
+              f'Edit that one or pick a different name.', 'error')
+        return redirect(request.url)
+
     if prompt is None:
         prompt = LlmPrompt(lang=lang)
         db.session.add(prompt)
 
     prompt.lang                   = lang
+    prompt.name                   = name
     prompt.system_template        = system
     prompt.user_template_first    = first
     prompt.user_template_followup = follow
@@ -161,11 +186,17 @@ def _save_prompt(prompt):
     prompt.updated_by_id          = current_user.id
 
     if active:
-        LlmPrompt.query.filter(LlmPrompt.lang == lang, LlmPrompt.id != (prompt.id or -1)).update({'active': False})
+        # Deactivate other rows for the SAME (lang, name) — i.e. other
+        # versions of this persona. Other personas keep their state.
+        LlmPrompt.query.filter(
+            LlmPrompt.lang == lang,
+            LlmPrompt.name == name,
+            LlmPrompt.id != (prompt.id or -1),
+        ).update({'active': False})
         prompt.active = True
     else:
         prompt.active = False
 
     db.session.commit()
-    flash(f'Prompt saved for {lang} (active={prompt.active})', 'success')
+    flash(f'Prompt saved for {lang} / {name} (active={prompt.active})', 'success')
     return redirect(url_for('prompt_list'))

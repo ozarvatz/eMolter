@@ -315,6 +315,16 @@ def export_csv():
     df_json = pd.json_normalize(json_struct)
     df_final = pd.concat([df.drop('prosody_results', axis=1), df_json], axis=1)
 
+    # Net patient speaking time (seconds) = total_duration * speaking_ratio.
+    # speaking_ratio is the fraction of the recording that is actual voiced
+    # speech, so the product is how long the patient actually talked. Computed
+    # here (not stored) so it always reflects the latest prosody fields.
+    if 'total_duration' in df_final.columns and 'speaking_ratio' in df_final.columns:
+        df_final['net_patient_seconds'] = (
+            pd.to_numeric(df_final['total_duration'], errors='coerce')
+            * pd.to_numeric(df_final['speaking_ratio'], errors='coerce')
+        )
+
     if 'patient_utm_params' in df_final.columns:
         df_final['patient_utm_params'] = df_final['patient_utm_params'].apply(
             lambda x: _format_utm_dict(x if isinstance(x, dict) else (json.loads(x) if x else {}))

@@ -26,6 +26,30 @@ def get_questions_list(lang, batch):
     return [q['body'] for q in data.get('questions', [])]
 
 
+def get_question_set_meta(lang, batch):
+    """Return call-length-control settings + persona name for (lang, batch).
+    When the QuestionSet row is missing (JSON-file fallback) or pre-dates
+    the new columns, returns conservative defaults: by_count mode, no time
+    target, cap of 10 questions, engagement strategy, default persona."""
+    from automated_survey_flask.models import QuestionSet
+    qs = QuestionSet.query.filter_by(batch=batch, lang=lang).first()
+    if qs is None:
+        return {
+            'length_mode':        QuestionSet.LENGTH_BY_COUNT,
+            'target_seconds':     None,
+            'max_questions':      10,
+            'extension_strategy': QuestionSet.EXT_ENGAGEMENT,
+            'prompt_name':        None,
+        }
+    return {
+        'length_mode':        qs.length_mode or QuestionSet.LENGTH_BY_COUNT,
+        'target_seconds':     qs.target_seconds,
+        'max_questions':      qs.max_questions or 10,
+        'extension_strategy': qs.extension_strategy or QuestionSet.EXT_ENGAGEMENT,
+        'prompt_name':        qs.prompt_name,
+    }
+
+
 def _json_item(lang, batch, n, entity):
     json_path = f"questions_{batch}_{lang}.json"
     with open(json_path, 'r', encoding='utf-8') as f:

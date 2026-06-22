@@ -78,6 +78,10 @@
     <div class="panel-heading"><strong>Call Length (s)</strong> <span id="stats_length" class="text-muted small"></span></div>
     <div class="panel-body"><div id="chart_length" style="height: 280px;"></div></div>
 </div>
+<div class="panel panel-default">
+    <div class="panel-heading"><strong>Net Patient Speech (s)</strong> <span id="stats_net_talk" class="text-muted small"></span></div>
+    <div class="panel-body"><div id="chart_net_talk" style="height: 280px;"></div></div>
+</div>
 
 <div class="well well-sm">
     <small>
@@ -164,8 +168,8 @@
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
-const METRIC_KEYS = ['pitch', 'voice_breaks', 'length'];
-const METRIC_UNITS = {pitch: 'Hz', length: 's', voice_breaks: '%'};
+const METRIC_KEYS = ['pitch', 'voice_breaks', 'length', 'net_talk'];
+const METRIC_UNITS = {pitch: 'Hz', length: 's', voice_breaks: '%', net_talk: 's'};
 
 // Stable color palette for context segments.
 const SEGMENT_PALETTE = [
