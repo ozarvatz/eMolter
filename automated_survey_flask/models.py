@@ -218,7 +218,12 @@ class QuestionSet(db.Model):
     length_mode        = db.Column(db.String(20), nullable=False, default=LENGTH_BY_COUNT)
     target_seconds     = db.Column(db.Integer, nullable=True)
     max_questions      = db.Column(db.Integer, nullable=False, default=10)
-    extension_strategy = db.Column(db.String(20), nullable=False, default=EXT_ENGAGEMENT)
+    extension_strategy = db.Column(db.String(32), nullable=True, default=EXT_ENGAGEMENT)
+    turn_instruction = db.Column(
+        db.Text,
+        nullable=True,
+        default="The scripted questions are done. Ask ONE short open-ended follow-up that goes deeper on something the patient already said, or rephrases an earlier scripted question from a new angle. Do NOT repeat verbatim. Do NOT raise safety topics (suicidal ideation, self-harm, substance use)."
+    )
     created_by_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at         = db.Column(db.DateTime, default=db.func.now())
     updated_at         = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())

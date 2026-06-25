@@ -81,7 +81,7 @@ ECHO_GUARD_SECONDS = 1.2
 # arrives we ignore it if a non-empty interim Results was seen within the last
 # INTERIM_GRACE_SECONDS — the patient is still speaking; wait for those words
 # to finalize (or for a genuine silence gap with no pending interim).
-INTERIM_GRACE_SECONDS = 0.8
+INTERIM_GRACE_SECONDS = 1.5
 
 # Topics the by_time extension flow is forbidden from steering toward, even
 # when the patient has mentioned them. Filtered out of `engagement_topics`
@@ -288,6 +288,8 @@ def ws_media_stream():
                 "media": {"payload": base64.b64encode(chunk).decode()},
             })
 
+    topics_ready = threading.Event()
+
     def _topics_runner(history_snapshot):
         """Worker thread: run topic extraction off the critical path.
         Failures are swallowed so the conversation never breaks because of
@@ -296,6 +298,7 @@ def ws_media_stream():
             t0 = time.time()
             topics = extract_topics(history_snapshot)
             state['topics'] = topics
+            topics_ready.set()
             _log(f"[TOPICS] {(time.time()-t0)*1000:.0f}ms -> {topics}")
         except Exception as e:
             _log(f"[TOPICS] error: {type(e).__name__}: {e}")
@@ -331,6 +334,7 @@ def ws_media_stream():
         state['topic_turn'] += 1
         if state['topic_turn'] % TOPIC_EXTRACT_EVERY_N_TURNS == 0:
             history_snapshot = [dict(t) for t in history]
+            topics_ready.clear()
             threading.Thread(
                 target=_topics_runner,
                 args=(history_snapshot,),
@@ -390,9 +394,16 @@ def ws_media_stream():
         # when scripted questions are exhausted but the time target isn't.
         use_extension = (mode == 'by_time' and next_q_num > max_q)
         if use_extension:
+            # Wait up to 1.5s for the topic extraction to finish so we have
+            # fresh engagement topics for the LLM.
+            topics_ready.wait(timeout=1.5)
             eng = _engagement_topics(state)
             strategy = qs_meta.get('extension_strategy') or 'engagement'
-            if eng and strategy in ('engagement', 'mix'):
+            db_instr = qs_meta.get('turn_instruction')
+            
+            if db_instr and db_instr.strip():
+                turn_instr = db_instr.strip()
+            elif eng and strategy in ('engagement', 'mix'):
                 turn_instr = (
                     "The scripted questions are done. Ask ONE short open-ended "
                     "follow-up about something the patient has shown interest in. "
@@ -484,6 +495,25 @@ def ws_media_stream():
         since_interim = time.time() - state['last_interim_at']
         if since_interim < INTERIM_GRACE_SECONDS:
             _log(f"[TURN] defer flush ({reason}); interim {since_interim*1000:.0f}ms ago — still talking")
+            # Schedule a check to run after the grace period expires.
+            # If the user hasn't generated any new interims by then, force the flush.
+            delay = INTERIM_GRACE_SECONDS - since_interim
+            def delayed_check():
+                gevent.sleep(delay)
+                # Ensure the delayed thread runs with a valid Flask app context
+                # because forced flush leads to _ask_llm which needs db access.
+                with app.app_context():
+                    # Check if last_interim_at has moved forward since we slept
+                    current_since_interim = time.time() - state['last_interim_at']
+                    if current_since_interim >= INTERIM_GRACE_SECONDS:
+                        _log(f"[TURN] grace expired ({reason}), forcing delayed flush")
+                        # Temporarily bypass grace check to force flush
+                        saved_interim = state['last_interim_at']
+                        state['last_interim_at'] = 0.0 
+                        _flush_utterance(f"{reason}_delayed")
+                        state['last_interim_at'] = saved_interim
+            
+            gevent.spawn(delayed_check)
             return
         parts = state['utterance_parts']
         if not parts:
@@ -683,15 +713,12 @@ def ws_media_stream():
                 #                           nova-3. 1000 is Deepgram's documented
                 #                           minimum — values <1000 return 400
                 #                           Bad Request (confirmed 2026-05-26).
-                #   endpointing=700       → flags `speech_final` on the final
+                #   endpointing=1500      → flags `speech_final` on the final
                 #                           Results, the faster primary signal.
-                #                           Bumped from 300ms → 700ms after
+                #                           Bumped from 700ms → 1500ms after
                 #                           reports of the bot cutting patients
                 #                           off mid-sentence on natural breath
-                #                           pauses. Tune up further (900–1100)
-                #                           for very slow speakers (elderly,
-                #                           distressed); tune down for snappier
-                #                           turns if cutting-off resurfaces.
+                #                           pauses.
                 # The receiver buffers `is_final=true` Results and advances
                 # the survey on whichever end signal arrives first.
                 dg_url = (
@@ -700,8 +727,8 @@ def ws_media_stream():
                     f"&encoding=mulaw&sample_rate=8000"
                     f"&language={dg_lang}"
                     f"&interim_results=true"
-                    f"&endpointing=1000"
-                    f"&utterance_end_ms=1000"
+                    f"&endpointing=1500"
+                    f"&utterance_end_ms=2000"
                 )
                 try:
                     dg_ws[0] = _ws_lib.create_connection(

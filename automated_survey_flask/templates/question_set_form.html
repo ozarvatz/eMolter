@@ -149,6 +149,16 @@
                             </option>
                         </select>
                     </div>
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label for="turn_instruction">
+                            Extension Instruction (Optional)
+                            <span class="glyphicon glyphicon-question-sign text-muted" data-toggle="tooltip" data-placement="bottom"
+                                  title="Custom instruction to guide the LLM when generating extension follow-ups.&#10;&#10;Default (Engagement): 'The scripted questions are done. Ask ONE short open-ended follow-up about something the patient has shown interest in. Use the engagement topics below for inspiration. Do NOT repeat any question already asked. Do NOT raise safety topics (suicidal ideation, self-harm, substance use).'&#10;&#10;Default (Rephrase): 'The scripted questions are done. Ask ONE short open-ended follow-up that goes deeper on something the patient already said, or rephrases an earlier scripted question from a new angle. Do NOT repeat verbatim. Do NOT raise safety topics (suicidal ideation, self-harm, substance use).'">
+                            </span>
+                        </label>
+                        <textarea class="form-control" name="turn_instruction" id="turn_instruction" rows="4" 
+                                  placeholder="Leave blank to use the default instruction based on the strategy above...">{{ qs.turn_instruction if qs and qs.turn_instruction else '' }}</textarea>
+                    </div>
                 </div>
             </div>
         </div>

@@ -98,6 +98,7 @@ def _apply_length_controls(qs, form):
     qs.target_seconds     = target
     qs.max_questions      = max_q
     qs.extension_strategy = strategy
+    qs.turn_instruction   = form.get('turn_instruction', '').strip() or None
     return True, None
 
 

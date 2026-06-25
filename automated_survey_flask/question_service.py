@@ -40,6 +40,7 @@ def get_question_set_meta(lang, batch):
             'max_questions':      10,
             'extension_strategy': QuestionSet.EXT_ENGAGEMENT,
             'prompt_name':        None,
+            'turn_instruction':   None,
         }
     return {
         'length_mode':        qs.length_mode or QuestionSet.LENGTH_BY_COUNT,
@@ -47,6 +48,7 @@ def get_question_set_meta(lang, batch):
         'max_questions':      qs.max_questions or 10,
         'extension_strategy': qs.extension_strategy or QuestionSet.EXT_ENGAGEMENT,
         'prompt_name':        qs.prompt_name,
+        'turn_instruction':   qs.turn_instruction,
     }
 
 
