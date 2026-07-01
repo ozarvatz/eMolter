@@ -390,7 +390,20 @@ def ws_media_stream():
         state['q_num'] = next_q_num
         state['bot_speaking'] = True
 
-        # Decide scripted vs extension. Extension fires only in by_time mode
+        t_flush = time.time()
+        total_audio_bytes = 0
+
+        # Pre-cached filler plays immediately
+        try:
+            filler_audio = _tts(_get_filler(lang), lang, gender)
+            send_audio(filler_audio)
+            total_audio_bytes += len(filler_audio)
+            _log(f"[TIMING MS] filler sent at +{(time.time()-t_flush)*1000:.0f}ms "
+                  f"({len(filler_audio)} bytes, ~{len(filler_audio)/8000*1000:.0f}ms playback)")
+        except Exception as e:
+            _log(f"[MS] filler TTS error: {e}")
+
+        # Decide scripted vs extension. Extension fires only in by_time mode. Extension fires only in by_time mode
         # when scripted questions are exhausted but the time target isn't.
         use_extension = (mode == 'by_time' and next_q_num > max_q)
         if use_extension:
@@ -423,19 +436,6 @@ def ws_media_stream():
         else:
             eng = None
             turn_instr = ''
-        t_flush = time.time()
-        total_audio_bytes = 0
-
-        # Pre-cached filler plays immediately
-        try:
-            filler_audio = _tts(_get_filler(lang), lang, gender)
-            send_audio(filler_audio)
-            total_audio_bytes += len(filler_audio)
-            _log(f"[TIMING MS] filler sent at +{(time.time()-t_flush)*1000:.0f}ms "
-                  f"({len(filler_audio)} bytes, ~{len(filler_audio)/8000*1000:.0f}ms playback)")
-        except Exception as e:
-            _log(f"[MS] filler TTS error: {e}")
-
         # LLM call (Groq) — using the persona picked by the QuestionSet
         t0 = time.time()
         try:
