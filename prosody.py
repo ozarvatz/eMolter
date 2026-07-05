@@ -6,6 +6,7 @@ import tempfile
 import os
 import re
 import fcntl
+import math
 
 LOCK_FILE = '/tmp/prosody.lock'
 from parselmouth.praat import call
@@ -218,85 +219,164 @@ def get_prosody_features(url, channel_index=1):
                 sound = full_sound
 
             features = {}
+            features["total_duration"] = sound.get_total_duration()
 
-            # --- Pitch & Intensity ---
-            pitch = sound.to_pitch()
+            # --- Base Speech Extraction & Timing ---
+            intensity_full = sound.to_intensity()
+            speech_sound = _extract_speech_only(sound, intensity_full)
+            
+            # --- Speech rate & Pause (from Full Sound to determine speaking ratio) ---
+            intensities_full = intensity_full.values[0]
+            threshold_full = call(intensity_full, "Get mean", 0, 0, "energy") - 10
+            voiced_frames_full = [i for i in intensities_full if i > threshold_full]
+            
+            if len(intensities_full) > 0:
+                features["speaking_ratio"] = len(voiced_frames_full) / len(intensities_full)
+            else:
+                features["speaking_ratio"] = 0.0
+
+            # 1. net_talk = total_duration * speaking_ratio
+            features["net_talk"] = features["total_duration"] * features["speaking_ratio"]
+
+            # If we successfully extracted speech, calculate patient-specific metrics on the speech sound
+            if speech_sound is not None:
+                target_sound = speech_sound
+            else:
+                target_sound = sound
+                print("[prosody] Warning: Using full sound for core metrics due to speech extraction failure.")
+
+            # --- Pitch & Intensity (Now on Speech Only - Bot pauses ignored) ---
+            # NOTE: Pitch and F0 (Fundamental Frequency) are the same measurement.
+            # to_pitch() calculates the objective frequency (F0) in Hertz.
+            pitch = target_sound.to_pitch()
             features["mean_pitch_hz"] = call(pitch, "Get mean", 0, 0, "Hertz")
             features["pitch_sd_hz"] = call(pitch, "Get standard deviation", 0, 0, "Hertz")
             features["pitch_range_hz"] = call(pitch, "Get maximum", 0, 0, "Hertz", "Parabolic") - call(pitch, "Get minimum", 0, 0, "Hertz", "Parabolic")
 
-            intensity = sound.to_intensity()
+            # Explicit F0 metrics (Fundamental Frequency) as requested:
+            # f0_mean: The average frequency of the patient's voice.
+            # f0_std: Standard deviation, representing how much the frequency fluctuates.
+            # f0_var: Variance (std^2), a measure of how spread out the frequency values are.
+            features["f0_mean"] = features["mean_pitch_hz"]
+            features["f0_std"] = features["pitch_sd_hz"]
+            features["f0_var"] = features["f0_std"] ** 2 if features["f0_std"] else 0.0
+
+            intensity = target_sound.to_intensity()
             features["mean_intensity_db"] = call(intensity, "Get mean", 0, 0, "energy")
             
-            # --- Glottal Pulses & Voice Quality ---
-            # PointProcess is used for individual glottal pulse timing
-            pulses = call([sound, pitch], "To PointProcess (cc)")
+            # --- Glottal Pulses & Voice Quality (Now on Speech Only) ---
+            pulses = call([target_sound, pitch], "To PointProcess (cc)")
             
-            # This generates the "everything" report (Jitter, Shimmer, HNR, etc.)
-            raw_report = call([sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
+            raw_report = call([target_sound, pitch, pulses], "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
             features["voice_quality_stats"] = parse_voice_report(raw_report)
-
-            # Voice-break metrics from the full channel are inflated by the
-            # silences while the bot talks / between turns (see
-            # _extract_speech_only). Recompute them on speech-only audio so they
-            # measure breaks WITHIN the patient's speech, and overwrite just
-            # those keys. Jitter/shimmer/HNR stay from the full report (Praat
-            # already ignores unvoiced frames for them). The raw full-channel
-            # values are preserved under *_full_channel for transparency.
             vqs = features["voice_quality_stats"]
-            vqs["voice_breaks_source"] = "full_channel"
-            speech_sound = _extract_speech_only(sound, intensity)
-            if speech_sound is not None:
-                try:
-                    speech_pitch  = speech_sound.to_pitch()
-                    speech_pulses = call([speech_sound, speech_pitch], "To PointProcess (cc)")
-                    speech_report = call([speech_sound, speech_pitch, speech_pulses],
-                                         "Voice report", 0, 0, 75, 500, 1.3, 1.6, 0.03, 0.45)
-                    speech_stats  = parse_voice_report(speech_report)
-                    for k in ("degree_of_voice_breaks",
-                              "number_of_voice_breaks",
-                              "fraction_of_locally_unvoiced_frames"):
-                        if k in vqs:
-                            vqs[k + "_full_channel"] = vqs[k]
-                        if k in speech_stats:
-                            vqs[k] = speech_stats[k]
-                    vqs["voice_breaks_source"] = "speech_only"
-                except Exception as e:
-                    print(f"[prosody] speech-only voice report failed "
-                          f"({type(e).__name__}: {e}); keeping full-channel breaks")
+            vqs["voice_breaks_source"] = "speech_only" if speech_sound is not None else "full_channel"
 
             features["voice_health_score"] = get_voice_health_score(features["voice_quality_stats"])
-            # --- Formants (Vocal Tract resonance) ---
-            formant = sound.to_formant_burg()
+            
+            # --- Formants ---
+            formant = target_sound.to_formant_burg()
             features["f1_mean_hz"] = call(formant, "Get mean", 1, 0, 0, "Hertz")
             features["f2_mean_hz"] = call(formant, "Get mean", 2, 0, 0, "Hertz")
 
             # --- Harmonicity ---
-            harmonicity = call(sound, "To Harmonicity (cc)", 0.01, 75, 0.1, 1.0)
+            harmonicity = call(target_sound, "To Harmonicity (cc)", 0.01, 75, 0.1, 1.0)
             features["mean_hnr_db"] = call(harmonicity, "Get mean", 0, 0)
+            
+            # Explicitly adding F0 variability (which is the Pitch Standard Deviation)
+            features["f0_variability_hz"] = features.get("pitch_sd_hz")
 
-            ## --- Speech rate & Puse ---
-            intensities = intensity.values[0]
-            threshold = features["mean_intensity_db"] - 10 # 10dB below mean is often silence
-            voiced_frames = [i for i in intensities if i > threshold]
-            if len(intensities) > 0:
-                features["speaking_ratio"] = len(voiced_frames) / len(intensities)
-            else:
-                features["speaking_ratio"] = 0.0
+            # --- 3. Spiking Rate (Academic Syllable Nuclei proxy - De Jong & Wempe algorithm) ---
+            try:
+                # Find valid intensity peaks as syllable nuclei
+                intensities_array = intensity.values[0]
+                if len(intensities_array) > 2:
+                    max_intensity_val = max(intensities_array)
+                    silence_threshold = max_intensity_val - 25.0 # dB below max
+                    min_dip = 2.0 # Minimum dip between peaks in dB
+                    
+                    # 1. Find all local maxima above silence threshold
+                    peaks = []
+                    for i in range(1, len(intensities_array) - 1):
+                        if intensities_array[i] > intensities_array[i-1] and intensities_array[i] > intensities_array[i+1]:
+                            if intensities_array[i] > silence_threshold:
+                                peaks.append((i, intensities_array[i]))
+                    
+                    # 2. Filter peaks by requiring a minimum dip between them
+                    valid_peaks = []
+                    for peak in peaks:
+                        if not valid_peaks:
+                            valid_peaks.append(peak)
+                            continue
+                        
+                        prev_idx = valid_peaks[-1][0]
+                        curr_idx = peak[0]
+                        dip = min(intensities_array[prev_idx:curr_idx])
+                        
+                        if (valid_peaks[-1][1] - dip >= min_dip) and (peak[1] - dip >= min_dip):
+                            valid_peaks.append(peak)
+                        elif peak[1] > valid_peaks[-1][1]:
+                            # Replace previous peak if the current one is higher and dip was insufficient
+                            valid_peaks[-1] = peak
+                            
+                    num_syllables = len(valid_peaks)
+                else:
+                    num_syllables = 0
 
-            features["total_duration"] = sound.get_total_duration()
-            # Emotion analysis is optional (heavy transformer model). Skipped
-            # unless PROSODY_EMOTION=1. See EMOTION_ENABLED at module top.
+                if features["net_talk"] > 0:
+                    features["spiking_rate"] = num_syllables / features["net_talk"]
+                else:
+                    features["spiking_rate"] = 0.0
+            except Exception as e:
+                 print(f"[prosody] Spiking rate calculation failed: {e}")
+                 features["spiking_rate"] = None
+                 
+            # --- Pause Duration ---
+            # Calculated by subtracting the net patient talk time from the total time the patient channel was active
+            # We already have total_duration and net_talk
+            features["pause_duration"] = features["total_duration"] - features["net_talk"]
+
+            # --- 6. CPP (Smoothed Cepstral Peak Prominence) ---
+            try:
+                # Using the exact Parselmouth 11-argument syntax for "Get CPPS"
+                # (subtractTrend, timeAvg, quefAvg, pitchFloor, pitchCeiling, tolerance, interpolation, qStart, qEnd, trendType, fitMethod)
+                cepstrogram = call(target_sound, "To PowerCepstrogram", 60.0, 0.002, 5000.0, 50.0)
+                cpp = call(cepstrogram, "Get CPPS", "yes", 0.01, 0.005, 60.0, 330.0, 0.05, "Parabolic", 0.001, 0.0, "Straight", "Robust")
+                features["cpp"] = cpp
+            except Exception as e:
+                print(f"[prosody] CPP calculation failed: {e}")
+                features["cpp"] = None
+
+            # Emotion analysis is optional
             if EMOTION_ENABLED:
                 features["sentiment"] = analyze_emotions(tmp_path, sr=16000)
             else:
                 features["sentiment"] = None
 
+            caculate_stats(features)    
             return features
 
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+def caculate_stats(features):
+    x1 = features.get('pause_duration') or 0
+    x2 = features.get('spiking_rate') or 0
+    x3 = features.get('f0_variability_hz') or 0
+    voice_stats = features.get('voice_quality_stats', {}) 
+    x4 = voice_stats.get('jitter_local') or 0
+    x5 = features.get('cpp') or 0
+
+    normVector = math.sqrt(x1*x1 + x2*x2 + x3*x3 + x4*x4 +x5*x5)
+    v = [x1/normVector, x2/normVector, x3/normVector, x4/normVector, x5/normVector]
+    s = [x1*v[0], x1*v[1], x1*v[2], x1*v[3], x1*v[4]]
+
+    if 'stats' not in features:
+        features["stats"] = {}
+    features["stats"]['norm_vector'] = normVector
+    features["stats"]['v'] = v
+    features["stats"]['s'] = s    
+
 
 if __name__ == "__main__":
     call_snippet = None
