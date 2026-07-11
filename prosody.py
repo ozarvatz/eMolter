@@ -376,7 +376,13 @@ def caculate_stats(features):
     features["stats"]['norm_vector'] = normVector
     features["stats"]['v'] = v
     features["stats"]['s'] = s    
-
+    features["stats"]['dictionary'] = {
+        '0': 'pause_duration',
+        '1': 'spiking_rate',
+        '2': 'f0_variability_hz',
+        '3': 'jitter_local',
+        '4': 'cpp',
+    }
 
 if __name__ == "__main__":
     call_snippet = None

@@ -19,21 +19,19 @@
     <div class="panel-body">
         <!-- 30-second summary banner: one badge per metric -->
         <div class="row" id="summaryBanner">
-            <div class="col-md-4">
-                <div id="summary_pitch" class="alert alert-info" style="margin-bottom: 0;">
-                    <strong>Pitch:</strong> <span class="msg">loading…</span>
+            {% for key, label in [
+                ('pause_duration_s', 'Pause Duration'),
+                ('spiking_rate_s', 'Spiking Rate'),
+                ('f0_variability_hz_s', 'F0 Var'),
+                ('jitter_local_s', 'Jitter'),
+                ('cpp_s', 'CPP')
+            ] %}
+            <div class="col-md-2" style="width: 20%;">
+                <div id="summary_{{ key }}" class="alert alert-info" style="margin-bottom: 0; padding: 10px; font-size: 12px;">
+                    <strong>{{ label }}:</strong> <span class="msg">loading…</span>
                 </div>
             </div>
-            <div class="col-md-4">
-                <div id="summary_voice_breaks" class="alert alert-info" style="margin-bottom: 0;">
-                    <strong>Voice Breaks:</strong> <span class="msg">loading…</span>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div id="summary_length" class="alert alert-info" style="margin-bottom: 0;">
-                    <strong>Length:</strong> <span class="msg">loading…</span>
-                </div>
-            </div>
+            {% endfor %}
         </div>
     </div>
 </div>
@@ -41,57 +39,89 @@
 <!-- Controls -->
 <div class="well well-sm">
     <form id="reportControls" class="form-inline" onsubmit="return false;">
-        <div class="form-group" style="margin-right: 25px;">
-            <label for="visibleInput">Show last N calls:</label>
+        <div class="form-group" style="margin-right: 20px;">
+            <label for="visibleInput">Calls:</label>
             <input id="visibleInput" type="range" min="2" max="200" value="14"
-                   style="vertical-align: middle; width: 200px;" />
-            <span id="visibleValue" style="display: inline-block; min-width: 30px; font-weight: bold;">14</span>
+                   style="vertical-align: middle; width: 100px;" />
+            <span id="visibleValue" style="font-weight: bold;">14</span>
         </div>
-        <div class="form-group" style="margin-right: 25px;">
-            <label for="windowInput">Baseline window (last N calls):</label>
-            <input id="windowInput" type="range" min="2" max="100" value="30"
-                   style="vertical-align: middle; width: 200px;" />
-            <span id="windowValue" style="display: inline-block; min-width: 30px; font-weight: bold;">30</span>
+        <div class="form-group" style="margin-right: 20px;">
+            <label for="netTalkThresholdInput">NetTalk Thr (s):</label>
+            <input id="netTalkThresholdInput" type="range" min="0" max="120" step="5" value="30"
+                   style="vertical-align: middle; width: 100px;" />
+            <span id="netTalkThresholdValue" style="font-weight: bold;">30</span>
         </div>
-        <div class="form-group" style="margin-right: 25px;">
-            <label for="thresholdInput">Threshold (±k · STD):</label>
+        <div class="form-group" style="margin-right: 20px;">
+            <label for="pAlphaInput">MK p-α:</label>
+            <input id="pAlphaInput" type="range" min="0.01" max="0.2" step="0.01" value="0.05"
+                   style="vertical-align: middle; width: 100px;" />
+            <span id="pAlphaValue" style="font-weight: bold;">0.05</span>
+        </div>
+        <div class="form-group" style="margin-right: 20px;">
+            <label for="windowInput">Baseline:</label>
+            <input id="windowInput" type="range" min="2" max="100" value="10"
+                   style="vertical-align: middle; width: 100px;" />
+            <span id="windowValue" style="font-weight: bold;">10</span>
+        </div>
+        <div class="form-group" style="margin-right: 20px;">
+            <label for="thresholdInput">±k·STD:</label>
             <input id="thresholdInput" type="range" min="0.5" max="5" step="0.1" value="2.0"
-                   style="vertical-align: middle; width: 200px;" />
-            <span id="thresholdValue" style="display: inline-block; min-width: 30px; font-weight: bold;">2.0</span>
+                   style="vertical-align: middle; width: 100px;" />
+            <span id="thresholdValue" style="font-weight: bold;">2.0</span>
         </div>
         <span class="text-muted" id="loadingIndicator" style="display:none;">
-            <span class="glyphicon glyphicon-refresh spinning"></span> updating…
+            <span class="glyphicon glyphicon-refresh spinning"></span>
         </span>
     </form>
 </div>
 
 <!-- Charts -->
-<div class="panel panel-default">
-    <div class="panel-heading"><strong>Mean Pitch (Hz)</strong> <span id="stats_pitch" class="text-muted small"></span></div>
-    <div class="panel-body"><div id="chart_pitch" style="height: 280px;"></div></div>
+<div id="chartsContainer">
+    {% for key, label, _ in [
+        ('pause_duration_s', 'Pause Duration (s)', ''),
+        ('spiking_rate_s', 'Spiking Rate (s)', ''),
+        ('f0_variability_hz_s', 'F0 Variability (Hz)', ''),
+        ('jitter_local_s', 'Jitter Local (%)', ''),
+        ('cpp_s', 'CPP (dB)', '')
+    ] %}
+    <div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+        <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
+            <div class="row">
+                <div class="col-md-6">
+                    <strong style="font-size: 16px;">{{ label }}</strong>
+                    <span id="stats_{{ key }}" class="text-muted small" style="margin-left: 10px;"></span>
+                </div>
+                <div class="col-md-6 text-right" id="badge_{{ key }}">
+                    <!-- MK Badge goes here -->
+                </div>
+            </div>
+        </div>
+        <div class="panel-body" style="padding: 10px;">
+            <div style="height: 300px; position: relative;">
+                <canvas id="chart_{{ key }}"></canvas>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
 </div>
-<div class="panel panel-default">
-    <div class="panel-heading"><strong>Voice Breaks (%)</strong> <span id="stats_voice_breaks" class="text-muted small"></span></div>
-    <div class="panel-body"><div id="chart_voice_breaks" style="height: 280px;"></div></div>
-</div>
-<div class="panel panel-default">
-    <div class="panel-heading"><strong>Call Length (s)</strong> <span id="stats_length" class="text-muted small"></span></div>
-    <div class="panel-body"><div id="chart_length" style="height: 280px;"></div></div>
-</div>
-<div class="panel panel-default">
-    <div class="panel-heading"><strong>Net Patient Speech (s)</strong> <span id="stats_net_talk" class="text-muted small"></span></div>
-    <div class="panel-body"><div id="chart_net_talk" style="height: 280px;"></div></div>
+
+<div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+    <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
+        <strong style="font-size: 16px;">Patient Topics Presence</strong>
+    </div>
+    <div class="panel-body" style="padding: 10px;">
+        <div style="height: 400px; position: relative;">
+            <canvas id="chart_topics"></canvas>
+        </div>
+    </div>
 </div>
 
 <div class="well well-sm">
     <small>
         <strong>How to read:</strong>
-        Each point is one processed call. The shaded band is the patient's baseline
-        (mean ±k·STD over the last N calls). Red markers fall outside that band.
-        Line color changes when the patient's <em>treatment</em>, <em>UTM source</em>,
-        or <em>gender</em> changes between calls. Hover any point for treatment, UTM,
-        gender, and age. <strong>Click any point</strong> to see that call's
-        conversation and extracted topics.
+        Solid blue line shows real data points. Shaded green band represents the patient's baseline (mean ±k·STD).
+        Dashed red line indicates the calculated MK trend. Points are included in trend calculation only if Net Patient Speech exceeds the set threshold.
+        <strong>Click any point</strong> to see that call's conversation and extracted topics.
     </small>
 </div>
 
@@ -134,10 +164,14 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+#chartsContainer canvas { cursor: pointer; }
+
+/* Modal and Topic Pills Styles */
 .topics-pills { margin-top: 4px; }
 .topic-pill {
     display: inline-block;
@@ -164,199 +198,202 @@
 .turn-q { background: #eef4fb; color: #234; margin-right: auto; }
 .turn-a { background: #e6f7e9; color: #243; margin-left: auto; text-align: right; }
 .turn-label { font-size: 10px; opacity: 0.6; display: block; margin-bottom: 2px; }
-#chart_pitch, #chart_voice_breaks, #chart_length { cursor: pointer; }
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
-const METRIC_KEYS = ['pitch', 'voice_breaks', 'length', 'net_talk'];
-const METRIC_UNITS = {pitch: 'Hz', length: 's', voice_breaks: '%', net_talk: 's'};
+const METRIC_KEYS = ['pause_duration_s', 'spiking_rate_s', 'f0_variability_hz_s', 'jitter_local_s', 'cpp_s'];
+const METRIC_UNITS = {
+    pause_duration_s: 's',
+    spiking_rate_s: 's',
+    f0_variability_hz_s: 'Hz',
+    jitter_local_s: '%',
+    cpp_s: 'dB'
+};
 
-// Stable color palette for context segments.
-const SEGMENT_PALETTE = [
-    '#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd', '#8c564b',
-    '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#d62728'
-];
-
-function contextColorMap(contexts) {
-    const map = {};
-    let i = 0;
-    for (const c of contexts) {
-        if (!(c in map)) {
-            map[c] = SEGMENT_PALETTE[i % SEGMENT_PALETTE.length];
-            i += 1;
-        }
-    }
-    return map;
-}
-
-function buildCustomdata(d, indices) {
-    return indices.map(i => [
-        d.treatments[i] || '—',
-        d.utms[i] || '—',
-        d.genders[i] || '—',
-        d.ages[i] != null ? d.ages[i] : '—',
-        d.dates[i] || '—',
-        d.call_ids ? d.call_ids[i] : null,    // index 5: call_id for click
-    ]);
-}
-
-// Canonical safety/crisis topics — highlighted differently in the modal.
-const SAFETY_TOPICS = new Set([
-    'suicidal_ideation', 'self_harm', 'substance_use'
-]);
+const charts = {};
 
 function renderChart(metricKey, d) {
     const m = d.metrics[metricKey];
     const elId = 'chart_' + metricKey;
+    const ctx = document.getElementById(elId).getContext('2d');
     const unit = METRIC_UNITS[metricKey];
+    const pAlpha = parseFloat(document.getElementById('pAlphaInput').value);
 
-    if (!d.dates.length) {
-        Plotly.purge(elId);
-        document.getElementById(elId).innerHTML =
-            '<div class="text-muted" style="padding: 80px; text-align:center;">No processed calls yet.</div>';
-        return;
+    // Update Badge
+    const badgeEl = document.getElementById('badge_' + metricKey);
+    if (m.trend === 'no trend' || m.p_value >= pAlpha) {
+        badgeEl.innerHTML = '<span class="label label-default" style="font-size: 13px;">STABLE / NO SIGNIFICANT TREND</span>';
+    } else {
+        const color = (m.trend === 'increasing') ? '#d9534f' : '#5cb85c';
+        badgeEl.innerHTML = `<span class="label" style="font-size: 13px; background-color: ${color};">SIGNIFICANT ${m.trend.toUpperCase()} TREND (p=${m.p_value.toFixed(3)})</span>`;
     }
 
-    const colorMap = contextColorMap(d.contexts);
-    const traces = [];
-    // Uniform x = call index (1..N). Dates move into the hover.
-    const xIdx = d.dates.map((_, i) => i + 1);
-
-    // 1) Gray spine — single light line connecting all points (no hover).
-    traces.push({
-        type: 'scatter',
-        mode: 'lines',
-        x: xIdx,
-        y: m.values,
-        line: {color: '#cccccc', width: 1},
-        hoverinfo: 'skip',
-        showlegend: false,
-    });
-
-    // 2) One short line trace per adjacent pair, colored by the *destination*
-    //    point's context. This creates the "segment changes color when context
-    //    changes" effect.
-    for (let i = 0; i < d.dates.length - 1; i++) {
-        if (m.values[i] == null || m.values[i+1] == null) continue;
-        const segColor = colorMap[d.contexts[i+1]];
-        traces.push({
-            type: 'scatter',
-            mode: 'lines',
-            x: [xIdx[i], xIdx[i+1]],
-            y: [m.values[i], m.values[i+1]],
-            line: {color: segColor, width: 3},
-            hoverinfo: 'skip',
-            showlegend: false,
-        });
-    }
-
-    // 3) Markers — split into in-band vs out-of-band so we can color the
-    //    outliers red. Markers carry the rich hover.
-    const inIdx = [], outIdx = [];
-    m.values.forEach((v, i) => {
-        if (v == null) return;
-        if (m.out_of_band[i]) outIdx.push(i); else inIdx.push(i);
-    });
-
-    const hoverTpl =
-        '<b>Call #%{x}</b> · %{customdata[4]}<br>' +
-        m.label + ': <b>%{y:.2f} ' + unit + '</b><br>' +
-        'Treatment: %{customdata[0]}<br>' +
-        'UTM: %{customdata[1]}<br>' +
-        'Gender: %{customdata[2]}<br>' +
-        'Age: %{customdata[3]}' +
-        '<extra></extra>';
-
-    if (inIdx.length) {
-        traces.push({
-            type: 'scatter',
-            mode: 'markers',
-            x: inIdx.map(i => xIdx[i]),
-            y: inIdx.map(i => m.values[i]),
-            marker: {
-                size: 9,
-                color: inIdx.map(i => colorMap[d.contexts[i]]),
-                line: {color: '#333', width: 0.5},
-            },
-            customdata: buildCustomdata(d, inIdx),
-            hovertemplate: hoverTpl,
-            showlegend: false,
-        });
-    }
-    if (outIdx.length) {
-        traces.push({
-            type: 'scatter',
-            mode: 'markers',
-            x: outIdx.map(i => xIdx[i]),
-            y: outIdx.map(i => m.values[i]),
-            marker: {
-                size: 12,
-                color: '#d62728',
-                symbol: 'circle-open',
-                line: {color: '#d62728', width: 2.5},
-            },
-            customdata: buildCustomdata(d, outIdx),
-            hovertemplate: hoverTpl,
-            showlegend: false,
-        });
-    }
-
-    // 4) Mean + threshold band as layout shapes.
-    const shapes = [];
-    if (m.mean != null && m.threshold_low != null) {
-        shapes.push({
-            type: 'rect', xref: 'paper', yref: 'y',
-            x0: 0, x1: 1, y0: m.threshold_low, y1: m.threshold_high,
-            fillcolor: '#5cb85c', opacity: 0.10, line: {width: 0},
-            layer: 'below',
-        });
-        shapes.push({
-            type: 'line', xref: 'paper', yref: 'y',
-            x0: 0, x1: 1, y0: m.mean, y1: m.mean,
-            line: {color: '#5cb85c', width: 1.5, dash: 'dash'},
-            layer: 'below',
-        });
-    }
-
-    const layout = {
-        margin: {l: 50, r: 20, t: 10, b: 40},
-        xaxis: {
-            title: 'Call #',
-            type: 'linear',
-            rangemode: 'tozero',
-            tick0: 1,
-            dtick: Math.max(1, Math.ceil(d.dates.length / 15)),
-            automargin: true,
-        },
-        yaxis: {title: unit, zeroline: false},
-        shapes: shapes,
-        hovermode: 'closest',
-    };
-
-    Plotly.react(elId, traces, layout, {displayModeBar: false, responsive: true});
-
-    // Wire click handler on marker traces (each marker carries call_id in
-    // customdata[5]). Re-bind on every render because Plotly.react rebuilds.
-    const chartEl = document.getElementById(elId);
-    chartEl.removeAllListeners && chartEl.removeAllListeners('plotly_click');
-    chartEl.on('plotly_click', function(ev) {
-        const pt = ev.points && ev.points[0];
-        if (!pt || !pt.customdata) return;
-        const callId = pt.customdata[5];
-        if (callId) openConversationModal(callId);
-    });
-
-    // Sub-heading stats text.
+    // Update Stats text
     const statsEl = document.getElementById('stats_' + metricKey);
     if (m.mean != null) {
-        statsEl.textContent =
-            '— baseline n=' + m.baseline_n + ', mean=' + m.mean.toFixed(2) +
-            ' ' + unit + ', STD=' + m.std.toFixed(2) +
-            ', band=[' + m.threshold_low.toFixed(2) + ', ' + m.threshold_high.toFixed(2) + ']';
-    } else {
-        statsEl.textContent = '— no numeric data';
+        statsEl.textContent = `— baseline n=${m.baseline_n}, mean=${m.mean.toFixed(2)}${unit}, band=[${m.threshold_low.toFixed(2)}, ${m.threshold_high.toFixed(2)}]`;
     }
+
+    if (charts[elId]) charts[elId].destroy();
+
+    const xLabels = d.dates.map((date, i) => `Call #${i+1}`);
+    
+    // Trend line points
+    const trendData = d.dates.map((_, i) => m.intercept + m.slope * i);
+
+    charts[elId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: xLabels,
+            datasets: [
+                {
+                    label: m.label,
+                    data: m.values,
+                    borderColor: '#1f77b4',
+                    backgroundColor: m.out_of_band.map(out => out ? '#d62728' : '#1f77b4'),
+                    borderWidth: 2,
+                    pointRadius: m.out_of_band.map(out => out ? 6 : 4),
+                    pointStyle: m.out_of_band.map(out => out ? 'rectRot' : 'circle'),
+                    tension: 0.1,
+                    segment: {
+                        borderColor: ctx => {
+                            const idx = ctx.p1DataIndex;
+                            // Change color if context changed? (Keep it simple for now)
+                            return '#1f77b4';
+                        }
+                    }
+                },
+                {
+                    label: 'MK Trend',
+                    data: trendData,
+                    borderColor: '#d62728',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false,
+                    borderWidth: 2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            onClick: (e, elements) => {
+                if (elements.length > 0) {
+                    const idx = elements[0].index;
+                    const callId = d.call_ids[idx];
+                    if (callId) openConversationModal(callId);
+                }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        afterBody: (context) => {
+                            const i = context[0].dataIndex;
+                            return [
+                                `Date: ${d.dates[i]}`,
+                                `Treatment: ${d.treatments[i] || '—'}`,
+                                `UTM: ${d.utms[i] || '—'}`,
+                                `Gender: ${d.genders[i] || '—'}`,
+                                `Age: ${d.ages[i] || '—'}`
+                            ];
+                        }
+                    }
+                },
+                annotation: {
+                    annotations: {
+                        band: {
+                            type: 'box',
+                            yMin: m.threshold_low,
+                            yMax: m.threshold_high,
+                            backgroundColor: 'rgba(92, 184, 92, 0.1)',
+                            borderWidth: 0,
+                        },
+                        mean: {
+                            type: 'line',
+                            yMin: m.mean,
+                            yMax: m.mean,
+                            borderColor: 'rgba(92, 184, 92, 0.5)',
+                            borderWidth: 1,
+                            borderDash: [2, 2],
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    title: { display: true, text: unit },
+                    beginAtZero: false
+                },
+                x: {
+                    title: { display: true, text: 'Calls' }
+                }
+            }
+        }
+    });
 }
+
+function renderTopicChart(d) {
+    const elId = 'chart_topics';
+    const ctx = document.getElementById(elId).getContext('2d');
+    
+    if (charts[elId]) charts[elId].destroy();
+
+    // Unique topics
+    const allTopicsSet = new Set();
+    d.patient_topics.forEach(list => list.forEach(t => allTopicsSet.add(t)));
+    const allTopics = Array.from(allTopicsSet).sort();
+
+    const datasets = allTopics.map((topic, topicIdx) => {
+        return {
+            label: topic,
+            data: d.patient_topics.map((callTopics, callIdx) => {
+                return callTopics.includes(topic) ? topicIdx : null;
+            }),
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            showLine: false,
+            backgroundColor: SEGMENT_PALETTE[topicIdx % SEGMENT_PALETTE.length]
+        };
+    });
+
+    charts[elId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: d.dates.map((_, i) => `Call #${i+1}`),
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ctx.dataset.label
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    type: 'linear',
+                    min: -1,
+                    max: allTopics.length,
+                    ticks: {
+                        stepSize: 1,
+                        callback: (value) => allTopics[value] || ''
+                    }
+                },
+                x: { title: { display: true, text: 'Calls' } }
+            }
+        }
+    });
+}
+
+const SEGMENT_PALETTE = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd', '#8c564b',
+    '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#d62728'
+];
 
 function renderSummary(metricKey, d) {
     const m = d.metrics[metricKey];
@@ -365,15 +402,14 @@ function renderSummary(metricKey, d) {
     el.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger');
 
     if (m.mean == null) {
-        msg.textContent = 'no numeric data yet';
+        msg.textContent = 'no data';
         el.classList.add('alert-info');
         return;
     }
     const total = m.values.filter(v => v != null).length;
     const out = m.out_of_band_count;
     const pct = total ? Math.round(100 * out / total) : 0;
-    msg.textContent = out + ' of ' + total + ' calls outside ±' +
-        d.threshold_k.toFixed(1) + 'σ (' + pct + '%)';
+    msg.textContent = `${out}/${total} (${pct}%)`;
     if (out === 0)      el.classList.add('alert-success');
     else if (pct < 25)  el.classList.add('alert-warning');
     else                el.classList.add('alert-danger');
@@ -383,28 +419,44 @@ function loadReport() {
     const window_ = document.getElementById('windowInput').value;
     const threshold = document.getElementById('thresholdInput').value;
     const visible = document.getElementById('visibleInput').value;
+    const netTalkThr = document.getElementById('netTalkThresholdInput').value;
+    const pAlpha = document.getElementById('pAlphaInput').value;
+
     document.getElementById('windowValue').textContent = window_;
     document.getElementById('thresholdValue').textContent = parseFloat(threshold).toFixed(1);
     document.getElementById('visibleValue').textContent = visible;
+    document.getElementById('netTalkThresholdValue').textContent = netTalkThr;
+    document.getElementById('pAlphaValue').textContent = pAlpha;
+    
     document.getElementById('loadingIndicator').style.display = '';
 
     $.ajax({
         url: '/api/therapist/patients/' + PATIENT_ID + '/report/data',
         method: 'GET',
-        data: {window: window_, threshold: threshold, visible: visible},
+        data: {
+            window: window_, 
+            threshold: threshold, 
+            visible: visible,
+            net_talk_threshold: netTalkThr,
+            p_value_threshold: pAlpha
+        },
         xhrFields: {withCredentials: true},
         success: function(d) {
             document.getElementById('loadingIndicator').style.display = 'none';
             if (d.error) { alert('Error: ' + d.error); return; }
+            
             const ageStr = d.patient.current_age != null ? d.patient.current_age + 'y' : '?y';
             document.getElementById('patientMeta').textContent =
                 (d.patient.treatment || 'no treatment') + ' · ' +
                 (d.patient.gender || '?') + ' · ' + ageStr;
+            
             const shownText = (d.n_visible < d.n_calls)
                 ? ' · showing ' + d.n_visible + ' of ' + d.n_calls + ' calls'
                 : ' · ' + d.n_calls + ' processed call' + (d.n_calls === 1 ? '' : 's');
             document.getElementById('patientCallCount').textContent = shownText;
+            
             METRIC_KEYS.forEach(k => { renderSummary(k, d); renderChart(k, d); });
+            renderTopicChart(d);
         },
         error: function(xhr) {
             document.getElementById('loadingIndicator').style.display = 'none';
@@ -491,6 +543,8 @@ function escapeHtml(s) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+const SAFETY_TOPICS = new Set(['suicidal_ideation', 'self_harm', 'substance_use']);
+
 // Debounce slider input so we don't hammer the endpoint while dragging.
 let debounceTimer = null;
 function scheduleLoad() {
@@ -499,9 +553,9 @@ function scheduleLoad() {
 }
 
 $(document).ready(function() {
-    document.getElementById('visibleInput').addEventListener('input', scheduleLoad);
-    document.getElementById('windowInput').addEventListener('input', scheduleLoad);
-    document.getElementById('thresholdInput').addEventListener('input', scheduleLoad);
+    ['visibleInput', 'windowInput', 'thresholdInput', 'netTalkThresholdInput', 'pAlphaInput'].forEach(id => {
+        document.getElementById(id).addEventListener('input', scheduleLoad);
+    });
     loadReport();
 });
 </script>

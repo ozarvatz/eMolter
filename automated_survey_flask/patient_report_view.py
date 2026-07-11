@@ -67,16 +67,98 @@ def _extract_net_talk(pr):
         return None
     return total * ratio
 
+def _extract_pause_duration(pr):
+    if not isinstance(pr, dict): return None
+    total = _extract_length(pr)
+    net = _extract_net_talk(pr)
+    if total is None or net is None: return None
+    return total - net
+
+def _extract_spiking_rate(pr):
+    if not isinstance(pr, dict): return None
+    return _safe_float(pr.get('spiking_rate'))
+
+def _extract_f0_variability(pr):
+    if not isinstance(pr, dict): return None
+    return _safe_float(pr.get('pitch_sd_hz'))
+
+def _extract_jitter_local(pr):
+    if not isinstance(pr, dict): return None
+    vqs = pr.get('voice_quality_stats') or {}
+    return _safe_float(vqs.get('jitter_local'))
+
+def _extract_cpp(pr):
+    if not isinstance(pr, dict): return None
+    return _safe_float(pr.get('cpp'))
+
 
 METRICS = [
-    ('pitch',        'Mean Pitch (Hz)',        _extract_pitch),
-    ('length',       'Call Length (s)',        _extract_length),
-    ('net_talk',     'Net Patient Speech (s)', _extract_net_talk),
-    ('voice_breaks', 'Voice Breaks (%)',       _extract_voice_breaks),
+    ('pause_duration_s',    'Pause Duration (s)',    _extract_pause_duration),
+    ('spiking_rate_s',      'Spiking Rate (s)',      _extract_spiking_rate),
+    ('f0_variability_hz_s', 'F0 Variability (Hz)',   _extract_f0_variability),
+    ('jitter_local_s',      'Jitter Local (%)',      _extract_jitter_local),
+    ('cpp_s',               'CPP (dB)',              _extract_cpp),
 ]
 
 
 # --- Helpers -----------------------------------------------------------------
+
+def mann_kendall_test(x, indices=None, alpha=0.05):
+    """
+    Simple Mann-Kendall trend test.
+    Returns: (trend, p_value, slope, intercept)
+    """
+    import numpy as np
+    import math
+    
+    def normal_cdf(x):
+        return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+    n = len(x)
+    if n < 3:
+        return 'no trend', 1.0, 0.0, np.mean(x) if n > 0 else 0.0
+    
+    if indices is None:
+        indices = list(range(n))
+
+    s = 0
+    for k in range(n - 1):
+        for j in range(k + 1, n):
+            s += np.sign(x[j] - x[k])
+            
+    unique_x = np.unique(x)
+    g = len(unique_x)
+    if n == g:
+        var_s = (n * (n - 1) * (2 * n + 5)) / 18
+    else:
+        _, tp = np.unique(x, return_counts=True)
+        var_s = (n * (n - 1) * (2 * n + 5) - np.sum(tp * (tp - 1) * (2 * tp + 5))) / 18
+        
+    if s > 0:
+        z = (s - 1) / np.sqrt(var_s) if var_s > 0 else 0
+    elif s < 0:
+        z = (s + 1) / np.sqrt(var_s) if var_s > 0 else 0
+    else:
+        z = 0
+        
+    p = 2 * (1 - normal_cdf(abs(z)))
+    
+    if p < alpha:
+        trend = 'increasing' if s > 0 else 'decreasing'
+    else:
+        trend = 'no trend'
+        
+    slopes = []
+    for k in range(n - 1):
+        for j in range(k + 1, n):
+            dx = indices[j] - indices[k]
+            if dx != 0:
+                slopes.append((x[j] - x[k]) / dx)
+    
+    slope = float(np.median(slopes)) if slopes else 0.0
+    intercept = float(np.median(x) - slope * np.median(indices))
+    
+    return trend, float(p), slope, intercept
 
 def _patient_for(patient_id):
     """Look up the patient and enforce ownership: superuser sees all, therapists
@@ -145,9 +227,9 @@ def patient_report_data(patient_id):
 
     # Slider params with safe defaults / clamps.
     try:
-        window = int(request.args.get('window', 30))
+        window = int(request.args.get('window', 10))
     except (TypeError, ValueError):
-        window = 30
+        window = 10
     window = max(2, min(window, 1000))
 
     try:
@@ -156,14 +238,21 @@ def patient_report_data(patient_id):
         threshold_k = 2.0
     threshold_k = max(0.5, min(threshold_k, 5.0))
 
-    # `visible` clips the chart to the most recent N calls. Baseline is still
-    # computed from up to `window` of the FULL history so the band reflects
-    # the patient's true normal, not just what's currently on screen.
     try:
         visible = int(request.args.get('visible', 14))
     except (TypeError, ValueError):
         visible = 14
     visible = max(2, min(visible, 1000))
+
+    try:
+        net_talk_threshold = float(request.args.get('net_talk_threshold', 30.0))
+    except (TypeError, ValueError):
+        net_talk_threshold = 30.0
+
+    try:
+        p_alpha = float(request.args.get('p_value_threshold', 0.05))
+    except (TypeError, ValueError):
+        p_alpha = 0.05
 
     calls = (
         Call.query
@@ -186,6 +275,8 @@ def patient_report_data(patient_id):
         f"{t or '∅'} | {u or '∅'} | {g or '∅'}"
         for t, u, g in zip(all_treatments, all_utms, all_genders)
     ]
+    all_net_talk = [_extract_net_talk(c.prosody_results) for c in calls]
+    all_patient_topics = [(c.topics.get('patient_topics', []) if c.topics else []) for c in calls]
 
     # Decide the display slice — the last `visible` calls.
     n_total = len(calls)
@@ -201,13 +292,27 @@ def patient_report_data(patient_id):
         else:
             low = mean - threshold_k * std
             high = mean + threshold_k * std
+        
         all_out_of_band = [
             (v is not None and low is not None and (v < low or v > high))
             for v in all_values
         ]
+
         # Sliced to display range
         values = all_values[start:]
         out_of_band = all_out_of_band[start:]
+        net_talk_slice = all_net_talk[start:]
+
+        # MK Trend calculation on the VISIBLE slice, considering net_talk_threshold
+        trend_input = []
+        trend_indices = []
+        for i, (v, nt) in enumerate(zip(values, net_talk_slice)):
+            if v is not None and nt is not None and nt >= net_talk_threshold:
+                trend_input.append(v)
+                trend_indices.append(i)
+        
+        trend_res, p_val, slope, intercept = mann_kendall_test(trend_input, trend_indices, alpha=p_alpha)
+
         metrics[key] = {
             'label': label,
             'values': values,
@@ -218,6 +323,10 @@ def patient_report_data(patient_id):
             'threshold_high': high,
             'out_of_band': out_of_band,
             'out_of_band_count': sum(1 for x in out_of_band if x),
+            'trend': trend_res,
+            'p_value': p_val,
+            'slope': slope,
+            'intercept': intercept
         }
 
     return jsonify({
@@ -233,6 +342,8 @@ def patient_report_data(patient_id):
         'window': window,
         'threshold_k': threshold_k,
         'visible': visible,
+        'net_talk_threshold': net_talk_threshold,
+        'p_value_threshold': p_alpha,
         'n_calls': n_total,
         'n_visible': n_show,
         'dates':      all_dates[start:],
@@ -242,6 +353,7 @@ def patient_report_data(patient_id):
         'genders':    all_genders[start:],
         'ages':       all_ages[start:],
         'contexts':   all_contexts[start:],
+        'patient_topics': all_patient_topics[start:],
         'metrics': metrics,
     })
 
