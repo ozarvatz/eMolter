@@ -369,7 +369,8 @@ def caculate_stats(features):
 
     normVector = math.sqrt(x1*x1 + x2*x2 + x3*x3 + x4*x4 +x5*x5)
     v = [x1/normVector, x2/normVector, x3/normVector, x4/normVector, x5/normVector]
-    s = [x1*v[0], x1*v[1], x1*v[2], x1*v[3], x1*v[4]]
+    s = x1*v[0] + x1*v[1] + x1*v[2] + x1*v[3] + x1*v[4]
+    # we need to find athe p from all the othere points 
 
     if 'stats' not in features:
         features["stats"] = {}
