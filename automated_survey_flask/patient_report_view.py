@@ -32,10 +32,6 @@ def _safe_float(v):
         return None
 
 
-def _extract_pitch(pr):
-    return _safe_float(pr.get('mean_pitch_hz')) if isinstance(pr, dict) else None
-
-
 def _extract_length(pr):
     if not isinstance(pr, dict):
         return None
@@ -44,13 +40,6 @@ def _extract_length(pr):
         return v
     vqs = pr.get('voice_quality_stats') or {}
     return _safe_float(vqs.get('from_0_to_0_seconds_duration'))
-
-
-def _extract_voice_breaks(pr):
-    if not isinstance(pr, dict):
-        return None
-    vqs = pr.get('voice_quality_stats') or {}
-    return _safe_float(vqs.get('degree_of_voice_breaks'))
 
 
 def _extract_net_talk(pr):
@@ -67,37 +56,30 @@ def _extract_net_talk(pr):
         return None
     return total * ratio
 
-def _extract_pause_duration(pr):
-    if not isinstance(pr, dict): return None
-    total = _extract_length(pr)
-    net = _extract_net_talk(pr)
-    if total is None or net is None: return None
-    return total - net
 
-def _extract_spiking_rate(pr):
+def _extract_v(pr, index):
     if not isinstance(pr, dict): return None
-    return _safe_float(pr.get('spiking_rate'))
+    stats = pr.get('stats')
+    if not stats: return None
+    v = stats.get('v')
+    if not isinstance(v, list) or len(v) <= index: return None
+    return _safe_float(v[index])
 
-def _extract_f0_variability(pr):
-    if not isinstance(pr, dict): return None
-    return _safe_float(pr.get('pitch_sd_hz'))
 
-def _extract_jitter_local(pr):
+def _extract_s_scalar(pr):
     if not isinstance(pr, dict): return None
-    vqs = pr.get('voice_quality_stats') or {}
-    return _safe_float(vqs.get('jitter_local'))
-
-def _extract_cpp(pr):
-    if not isinstance(pr, dict): return None
-    return _safe_float(pr.get('cpp'))
+    stats = pr.get('stats')
+    if not stats: return None
+    return _safe_float(stats.get('s'))
 
 
 METRICS = [
-    ('pause_duration_s',    'Pause Duration (s)',    _extract_pause_duration),
-    ('spiking_rate_s',      'Spiking Rate (s)',      _extract_spiking_rate),
-    ('f0_variability_hz_s', 'F0 Variability (Hz)',   _extract_f0_variability),
-    ('jitter_local_s',      'Jitter Local (%)',      _extract_jitter_local),
-    ('cpp_s',               'CPP (dB)',              _extract_cpp),
+    ('pause_duration_v',    'Pause Duration (v)',    lambda pr: _extract_v(pr, 0)),
+    ('spiking_rate_v',      'Spiking Rate (v)',      lambda pr: _extract_v(pr, 1)),
+    ('f0_variability_hz_v', 'F0 Variability (v)',    lambda pr: _extract_v(pr, 2)),
+    ('jitter_local_v',      'Jitter Local (v)',      lambda pr: _extract_v(pr, 3)),
+    ('cpp_v',               'CPP (v)',               lambda pr: _extract_v(pr, 4)),
+    ('s_scalar',            'S Scalar',              _extract_s_scalar),
 ]
 
 

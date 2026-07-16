@@ -20,13 +20,14 @@
         <!-- 30-second summary banner: one badge per metric -->
         <div class="row" id="summaryBanner">
             {% for key, label in [
-                ('pause_duration_s', 'Pause Duration'),
-                ('spiking_rate_s', 'Spiking Rate'),
-                ('f0_variability_hz_s', 'F0 Var'),
-                ('jitter_local_s', 'Jitter'),
-                ('cpp_s', 'CPP')
+                ('pause_duration_v', 'Pause Dur (v)'),
+                ('spiking_rate_v', 'Spiking (v)'),
+                ('f0_variability_hz_v', 'F0 Var (v)'),
+                ('jitter_local_v', 'Jitter (v)'),
+                ('cpp_v', 'CPP (v)'),
+                ('s_scalar', 'S Scalar')
             ] %}
-            <div class="col-md-2" style="width: 20%;">
+            <div class="col-md-2">
                 <div id="summary_{{ key }}" class="alert alert-info" style="margin-bottom: 0; padding: 10px; font-size: 12px;">
                     <strong>{{ label }}:</strong> <span class="msg">loading…</span>
                 </div>
@@ -78,11 +79,12 @@
 <!-- Charts -->
 <div id="chartsContainer">
     {% for key, label, _ in [
-        ('pause_duration_s', 'Pause Duration (s)', ''),
-        ('spiking_rate_s', 'Spiking Rate (s)', ''),
-        ('f0_variability_hz_s', 'F0 Variability (Hz)', ''),
-        ('jitter_local_s', 'Jitter Local (%)', ''),
-        ('cpp_s', 'CPP (dB)', '')
+        ('pause_duration_v', 'Pause Duration (v)', ''),
+        ('spiking_rate_v', 'Spiking Rate (v)', ''),
+        ('f0_variability_hz_v', 'F0 Variability (v)', ''),
+        ('jitter_local_v', 'Jitter Local (v)', ''),
+        ('cpp_v', 'CPP (v)', ''),
+        ('s_scalar', 'S Scalar', '')
     ] %}
     <div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
@@ -201,13 +203,14 @@
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
-const METRIC_KEYS = ['pause_duration_s', 'spiking_rate_s', 'f0_variability_hz_s', 'jitter_local_s', 'cpp_s'];
+const METRIC_KEYS = ['pause_duration_v', 'spiking_rate_v', 'f0_variability_hz_v', 'jitter_local_v', 'cpp_v', 's_scalar'];
 const METRIC_UNITS = {
-    pause_duration_s: 's',
-    spiking_rate_s: 's',
-    f0_variability_hz_s: 'Hz',
-    jitter_local_s: '%',
-    cpp_s: 'dB'
+    pause_duration_v: '',
+    spiking_rate_v: '',
+    f0_variability_hz_v: '',
+    jitter_local_v: '',
+    cpp_v: '',
+    s_scalar: ''
 };
 
 const charts = {};
