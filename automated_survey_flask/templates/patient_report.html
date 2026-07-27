@@ -20,12 +20,12 @@
         <!-- 30-second summary banner: one badge per metric -->
         <div class="row" id="summaryBanner">
             {% for key, label in [
-                ('pause_duration_v', 'Pause Dur (v)'),
-                ('spiking_rate_v', 'Spiking (v)'),
+                ('s_scalar', 'S'),
                 ('f0_variability_hz_v', 'F0 Var (v)'),
                 ('jitter_local_v', 'Jitter (v)'),
-                ('cpp_v', 'CPP (v)'),
-                ('s_scalar', 'S Scalar')
+                ('pause_duration_v', 'Pause Dur (v)'),
+                ('spiking_rate_v', 'Spiking (v)'),
+                ('cpp_v', 'CPP (v)')
             ] %}
             <div class="col-md-2">
                 <div id="summary_{{ key }}" class="alert alert-info" style="margin-bottom: 0; padding: 10px; font-size: 12px;">
@@ -53,10 +53,10 @@
             <span id="netTalkThresholdValue" style="font-weight: bold;">30</span>
         </div>
         <div class="form-group" style="margin-right: 20px;">
-            <label for="pAlphaInput">MK p-α:</label>
-            <input id="pAlphaInput" type="range" min="0.01" max="0.2" step="0.01" value="0.05"
-                   style="vertical-align: middle; width: 100px;" />
-            <span id="pAlphaValue" style="font-weight: bold;">0.05</span>
+            <label for="pAlphaInput">Trend p-α:</label>
+            <input id="pAlphaInput" type="range" min="0.0001" max="1.0" step="0.0001"
+                   style="vertical-align: middle; width: 100px;" autocomplete="off" />
+            <span id="pAlphaValue" style="font-weight: bold;"></span>
         </div>
         <div class="form-group" style="margin-right: 20px;">
             <label for="windowInput">Baseline:</label>
@@ -79,12 +79,12 @@
 <!-- Charts -->
 <div id="chartsContainer">
     {% for key, label, _ in [
-        ('pause_duration_v', 'Pause Duration (v)', ''),
-        ('spiking_rate_v', 'Spiking Rate (v)', ''),
+        ('s_scalar', 'S', ''),
         ('f0_variability_hz_v', 'F0 Variability (v)', ''),
         ('jitter_local_v', 'Jitter Local (v)', ''),
-        ('cpp_v', 'CPP (v)', ''),
-        ('s_scalar', 'S Scalar', '')
+        ('pause_duration_v', 'Pause Duration (v)', ''),
+        ('spiking_rate_v', 'Spiking Rate (v)', ''),
+        ('cpp_v', 'CPP (v)', '')
     ] %}
     <div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
@@ -203,7 +203,7 @@
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
-const METRIC_KEYS = ['pause_duration_v', 'spiking_rate_v', 'f0_variability_hz_v', 'jitter_local_v', 'cpp_v', 's_scalar'];
+const METRIC_KEYS = ['s_scalar', 'f0_variability_hz_v', 'jitter_local_v', 'pause_duration_v', 'spiking_rate_v', 'cpp_v'];
 const METRIC_UNITS = {
     pause_duration_v: '',
     spiking_rate_v: '',
@@ -404,6 +404,18 @@ function renderSummary(metricKey, d) {
     const msg = el.querySelector('.msg');
     el.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger');
 
+    if (metricKey === 's_scalar' && d.s_scalar_p_value !== null && d.s_scalar_p_value !== undefined) {
+        // Render P-Value for S Scalar
+        const pval = d.s_scalar_p_value.toFixed(4);
+        msg.innerHTML = `Pop. Diff p: ${pval} <strong>(${d.s_scalar_status})</strong>`;
+        if (d.s_scalar_status === 'DIFFERENT') {
+            el.classList.add('alert-danger');
+        } else {
+            el.classList.add('alert-success');
+        }
+        return;
+    }
+
     if (m.mean == null) {
         msg.textContent = 'no data';
         el.classList.add('alert-info');
@@ -418,35 +430,68 @@ function renderSummary(metricKey, d) {
     else                el.classList.add('alert-danger');
 }
 
+let isFirstLoad = true;
+
 function loadReport() {
     const window_ = document.getElementById('windowInput').value;
     const threshold = document.getElementById('thresholdInput').value;
     const visible = document.getElementById('visibleInput').value;
     const netTalkThr = document.getElementById('netTalkThresholdInput').value;
-    const pAlpha = document.getElementById('pAlphaInput').value;
+    const pAlphaInput = document.getElementById('pAlphaInput');
+    
+    // Ignore slider value on first load so we can override it
+    const pAlpha = isFirstLoad ? null : pAlphaInput.value;
 
     document.getElementById('windowValue').textContent = window_;
     document.getElementById('thresholdValue').textContent = parseFloat(threshold).toFixed(1);
     document.getElementById('visibleValue').textContent = visible;
     document.getElementById('netTalkThresholdValue').textContent = netTalkThr;
-    document.getElementById('pAlphaValue').textContent = pAlpha;
+    
+    if (pAlpha) {
+         document.getElementById('pAlphaValue').textContent = pAlpha;
+    }
     
     document.getElementById('loadingIndicator').style.display = '';
+
+    const ajaxData = {
+        window: window_, 
+        threshold: threshold, 
+        visible: visible,
+        net_talk_threshold: netTalkThr
+    };
+    if (pAlpha) {
+        ajaxData.p_value_threshold = pAlpha;
+    }
 
     $.ajax({
         url: '/api/therapist/patients/' + PATIENT_ID + '/report/data',
         method: 'GET',
-        data: {
-            window: window_, 
-            threshold: threshold, 
-            visible: visible,
-            net_talk_threshold: netTalkThr,
-            p_value_threshold: pAlpha
-        },
+        data: ajaxData,
         xhrFields: {withCredentials: true},
         success: function(d) {
             document.getElementById('loadingIndicator').style.display = 'none';
             if (d.error) { alert('Error: ' + d.error); return; }
+
+            // On first load, force the slider to match the Population Difference p-value
+            if (isFirstLoad) {
+                let initialAlpha = 0.05;
+                if (d.s_scalar_p_value !== null && d.s_scalar_p_value !== undefined) {
+                     initialAlpha = Math.max(0.0001, Math.min(1.0, d.s_scalar_p_value));
+                }
+                
+                // Format to exactly 4 decimal places
+                initialAlpha = parseFloat(initialAlpha.toFixed(4));
+                
+                pAlphaInput.value = initialAlpha;
+                document.getElementById('pAlphaValue').textContent = initialAlpha;
+                
+                isFirstLoad = false;
+                
+                if (initialAlpha !== 0.05) {
+                    loadReport();
+                    return;
+                }
+            }
             
             const ageStr = d.patient.current_age != null ? d.patient.current_age + 'y' : '?y';
             document.getElementById('patientMeta').textContent =

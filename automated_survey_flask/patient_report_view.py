@@ -11,6 +11,7 @@ from datetime import datetime
 
 from flask import render_template, jsonify, abort, request
 from flask_login import login_required, current_user
+import scipy.stats as stats
 
 from automated_survey_flask import app, csrf
 from automated_survey_flask.models import Patient, Call
@@ -311,6 +312,68 @@ def patient_report_data(patient_id):
             'intercept': intercept
         }
 
+    # --- Population Comparison: Multivariate Outlier Detection ---
+    # As requested by the analytics team, this replaces the 1D Welch's t-test on S-scalars.
+    # Instead of comparing means, we treat each patient call as a point in a 5D feature space
+    # (Pause, Spiking, F0, Jitter, CPP). We compute the Mahalanobis Distance (D^2) of the 
+    # target patient's centroid against the global population's covariance matrix.
+    # 
+    # Mahalanobis distance acts as a correlation-aware, multivariate generalization of a z-score.
+    # Assuming the population cloud is roughly multivariate normal, D^2 follows a Chi-squared 
+    # distribution with k=5 degrees of freedom. We use the Chi-squared CDF to compute the exact 
+    # probability (p-value) of observing a point at least this extreme by chance.
+    
+    import numpy as np
+
+    def _extract_vector(pr):
+        if not isinstance(pr, dict): return None
+        stats_dict = pr.get('stats')
+        if not stats_dict: return None
+        v = stats_dict.get('v')
+        if not isinstance(v, list) or len(v) != 5: return None
+        return v
+
+    # 1. Extract valid 5D vectors for the target patient
+    target_vectors = []
+    for pr, nt in zip((c.prosody_results for c in calls[start:]), net_talk_slice):
+        if pr is not None and nt is not None and nt >= net_talk_threshold:
+            vec = _extract_vector(pr)
+            if vec is not None:
+                target_vectors.append(vec)
+
+    # 2. Efficiently fetch ALL other prosody results to check net_talk and extract 5D vectors
+    other_results = Call.query.with_entities(Call.prosody_results).filter(
+        Call.patient_phone != patient.phone,
+        Call.is_processed == True,
+        Call.prosody_results.isnot(None)
+    ).all()
+
+    other_vectors = []
+    for (pr,) in other_results:
+        nt = _extract_net_talk(pr)
+        if nt is not None and nt >= net_talk_threshold:
+            vec = _extract_vector(pr)
+            if vec is not None:
+                other_vectors.append(vec)
+
+    s_p_value = None
+    if len(target_vectors) >= 1 and len(other_vectors) > 5:
+        try:
+            # Calculate centroids and covariance
+            target_centroid = np.mean(target_vectors, axis=0)
+            pop_centroid = np.mean(other_vectors, axis=0)
+            pop_cov = np.cov(other_vectors, rowvar=False)
+
+            # Mahalanobis distance squared (D^2 = (x - u)' * inv(Cov) * (x - u))
+            inv_cov = np.linalg.pinv(pop_cov)
+            diff = target_centroid - pop_centroid
+            d_squared = np.dot(np.dot(diff, inv_cov), diff)
+
+            # Convert to p-value using Chi-Squared CDF (5 degrees of freedom for 5D vector)
+            s_p_value = float(1.0 - stats.chi2.cdf(d_squared, 5))
+        except Exception:
+            s_p_value = None
+
     return jsonify({
         'patient': {
             'name': patient.nickname or patient.name,
@@ -337,6 +400,8 @@ def patient_report_data(patient_id):
         'contexts':   all_contexts[start:],
         'patient_topics': all_patient_topics[start:],
         'metrics': metrics,
+        's_scalar_p_value': float(s_p_value) if s_p_value is not None else None,
+        's_scalar_status': 'DIFFERENT' if (s_p_value is not None and s_p_value < 0.05) else 'Normal'
     })
 
 

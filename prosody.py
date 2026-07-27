@@ -207,6 +207,9 @@ def get_prosody_features(url, channel_index=1):
             os.fsync(tmp_file.fileno())
 
             # 2. Load into Parselmouth and scale
+            if os.path.getsize(tmp_path) == 0:
+                 return {"error": "Audio file contains 0 samples (0 bytes)."}
+
             full_sound = parselmouth.Sound(tmp_path)
             full_sound.scale_intensity(70)
             # 3. Safe Channel Extraction
@@ -367,14 +370,16 @@ def caculate_stats(features):
     x4 = voice_stats.get('jitter_local') or 0
     x5 = features.get('cpp') or 0
 
-    normVector = math.sqrt(x1*x1 + x2*x2 + x3*x3 + x4*x4 +x5*x5)
+    SS = x1*x1 + x2*x2 + x3*x3 + x4*x4 +x5*x5
+    normVector = math.sqrt(SS)
     v = [x1/normVector, x2/normVector, x3/normVector, x4/normVector, x5/normVector]
-    s = x1*v[0] + x1*v[1] + x1*v[2] + x1*v[3] + x1*v[4]
+    s = x1*v[0] + x2*v[1] + x3*v[2] + x4*v[3] + x5*v[4]
     # we need to find athe p from all the othere points 
 
     if 'stats' not in features:
         features["stats"] = {}
     features["stats"]['norm_vector'] = normVector
+    features["stats"]['SS'] = SS
     features["stats"]['v'] = v
     features["stats"]['s'] = s    
     features["stats"]['dictionary'] = {
@@ -434,7 +439,12 @@ if __name__ == "__main__":
                 db.session.commit()
                 
             except Exception as e:
-                print(json.dumps({"error": str(e),
+                error_msg = str(e)
+                print(json.dumps({"error": error_msg,
                                   "call_sid": call_snippet.call_sid,
                                   "record_sid": call_snippet.record_sid}, indent=4))
+                # Mark as processed even on error to avoid infinite retry loop for bad records
+                call_snippet.prosody_results = {"error": error_msg}
+                call_snippet.is_processed = True
+                db.session.commit()
             
