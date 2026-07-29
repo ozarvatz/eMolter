@@ -80,7 +80,7 @@
                         {% if call.is_processed and call.prosody_results %}
                             {% set dur = call.prosody_results.get('total_duration') %}
                             {% if dur is none and call.prosody_results.get('voice_quality_stats') %}
-                                {% set dur = call.prosody_results['voice_quality_stats'].get('from_0_to_0_seconds_duration') %}
+                                {% set dur = call.prosody_results.get('voice_quality_stats').get('from_0_to_0_seconds_duration') %}
                             {% endif %}
                             {% set ratio = call.prosody_results.get('speaking_ratio') %}
                             {% if dur is not none and ratio is not none %}
@@ -96,7 +96,8 @@
                     </td>
                     <td>
                         {% if call.is_processed and call.prosody_results %}
-                            {{ "%.1f"|format(call.prosody_results['mean_pitch_hz']) if call.prosody_results.get('mean_pitch_hz') else '-' }}
+                            {% set pitch = call.prosody_results.get('mean_pitch_hz') %}
+                            {{ "%.1f"|format(pitch) if pitch else '-' }}
                         {% else %}
                             <span class="text-muted">-</span>
                         {% endif %}
@@ -117,7 +118,7 @@
                     </td>
                     <td>
                         {% if call.is_processed and call.prosody_results and call.prosody_results.get('voice_quality_stats') %}
-                            {% set shimmer = call.prosody_results['voice_quality_stats'].get('shimmer_local') %}
+                            {% set shimmer = call.prosody_results.get('voice_quality_stats').get('shimmer_local') %}
                             {% if shimmer %}
                                 <span class="{% if shimmer < 3.0 %}text-success{% elif shimmer < 5.0 %}text-warning{% else %}text-danger{% endif %}">
                                     {{ "%.2f"|format(shimmer) }}
@@ -131,7 +132,7 @@
                     </td>
                     <td>
                         {% if call.is_processed and call.prosody_results and call.prosody_results.get('voice_quality_stats') %}
-                            {% set jitter = call.prosody_results['voice_quality_stats'].get('jitter_local') %}
+                            {% set jitter = call.prosody_results.get('voice_quality_stats').get('jitter_local') %}
                             {% if jitter %}
                                 <span class="{% if jitter < 1.0 %}text-success{% elif jitter < 2.0 %}text-warning{% else %}text-danger{% endif %}">
                                     {{ "%.2f"|format(jitter) }}%
@@ -145,7 +146,7 @@
                     </td>
                     <td>
                         {% if call.is_processed and call.prosody_results and call.prosody_results.get('voice_quality_stats') %}
-                            {% set dvb = call.prosody_results['voice_quality_stats'].get('degree_of_voice_breaks') %}
+                            {% set dvb = call.prosody_results.get('voice_quality_stats').get('degree_of_voice_breaks') %}
                             {% if dvb is not none %}
                                 <span class="{% if dvb < 10 %}text-success{% elif dvb < 30 %}text-warning{% else %}text-danger{% endif %}">
                                     {{ "%.1f"|format(dvb) }}%
@@ -231,19 +232,19 @@
                 <table class="table table-bordered table-condensed">
                     <tr>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_pitch_hz').explanation if prosody_params.get('mean_pitch_hz') else '' }}">Mean Pitch</th>
-                        <td>{{ "%.2f"|format(call.prosody_results['mean_pitch_hz']) }} Hz</td>
+                        <td>{{ "%.2f"|format(call.prosody_results.get('mean_pitch_hz', 0)) if call.prosody_results.get('mean_pitch_hz') else 'N/A' }} Hz</td>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_intensity_db').explanation if prosody_params.get('mean_intensity_db') else '' }}">Mean Intensity</th>
-                        <td>{{ "%.2f"|format(call.prosody_results['mean_intensity_db']) if call.prosody_results.get('mean_intensity_db') else 'N/A' }} dB</td>
+                        <td>{{ "%.2f"|format(call.prosody_results.get('mean_intensity_db', 0)) if call.prosody_results.get('mean_intensity_db') else 'N/A' }} dB</td>
                     </tr>
                     <tr>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('mean_hnr_db').explanation if prosody_params.get('mean_hnr_db') else '' }}">Mean HNR</th>
-                        <td>{{ "%.2f"|format(call.prosody_results['mean_hnr_db']) }} dB</td>
+                        <td>{{ "%.2f"|format(call.prosody_results.get('mean_hnr_db', 0)) if call.prosody_results.get('mean_hnr_db') else 'N/A' }} dB</td>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('f1_mean_hz').explanation if prosody_params.get('f1_mean_hz') else '' }}">Formant F1</th>
-                        <td>{{ "%.2f"|format(call.prosody_results['f1_mean_hz']) }} Hz</td>
+                        <td>{{ "%.2f"|format(call.prosody_results.get('f1_mean_hz', 0)) if call.prosody_results.get('f1_mean_hz') else 'N/A' }} Hz</td>
                     </tr>
                     <tr>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('f2_mean_hz').explanation if prosody_params.get('f2_mean_hz') else '' }}">Formant F2</th>
-                        <td>{{ "%.2f"|format(call.prosody_results['f2_mean_hz']) }} Hz</td>
+                        <td>{{ "%.2f"|format(call.prosody_results.get('f2_mean_hz', 0)) if call.prosody_results.get('f2_mean_hz') else 'N/A' }} Hz</td>
                         <th></th>
                         <td></td>
                     </tr>
@@ -252,7 +253,7 @@
                 {% if call.prosody_results.get('voice_quality_stats') %}
                 <h5>Voice Quality Statistics</h5>
                 <table class="table table-bordered table-condensed">
-                    {% set vqs = call.prosody_results['voice_quality_stats'] %}
+                    {% set vqs = call.prosody_results.get('voice_quality_stats') %}
                     <tr>
                         <th class="param-label" data-toggle="tooltip" title="{{ prosody_params.get('from_0_to_0_seconds_duration').explanation if prosody_params.get('from_0_to_0_seconds_duration') else '' }}">Duration</th>
                         <td>{{ "%.2f"|format(vqs.get('from_0_to_0_seconds_duration', 0)) }} s</td>
@@ -359,7 +360,7 @@
                         {% endfor %}
                     </tr>
                     <tr>
-                        {% set sentiment = call.prosody_results['sentiment'] %}
+                        {% set sentiment = call.prosody_results.get('sentiment') %}
                         {% for emotion in ['happiness', 'anger', 'sadness', 'disgust', 'fear'] %}
                         {% set score = sentiment.get(emotion, 0) %}
                         <td>
