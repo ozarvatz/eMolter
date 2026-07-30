@@ -86,63 +86,6 @@ METRICS = [
 
 # --- Helpers -----------------------------------------------------------------
 
-def mann_kendall_test(x, indices=None, alpha=0.05):
-    """
-    Simple Mann-Kendall trend test.
-    Returns: (trend, p_value, slope, intercept)
-    """
-    import numpy as np
-    import math
-    
-    def normal_cdf(x):
-        return 0.5 * (1 + math.erf(x / math.sqrt(2)))
-
-    n = len(x)
-    if n < 3:
-        return 'no trend', 1.0, 0.0, np.mean(x) if n > 0 else 0.0
-    
-    if indices is None:
-        indices = list(range(n))
-
-    s = 0
-    for k in range(n - 1):
-        for j in range(k + 1, n):
-            s += np.sign(x[j] - x[k])
-            
-    unique_x = np.unique(x)
-    g = len(unique_x)
-    if n == g:
-        var_s = (n * (n - 1) * (2 * n + 5)) / 18
-    else:
-        _, tp = np.unique(x, return_counts=True)
-        var_s = (n * (n - 1) * (2 * n + 5) - np.sum(tp * (tp - 1) * (2 * tp + 5))) / 18
-        
-    if s > 0:
-        z = (s - 1) / np.sqrt(var_s) if var_s > 0 else 0
-    elif s < 0:
-        z = (s + 1) / np.sqrt(var_s) if var_s > 0 else 0
-    else:
-        z = 0
-        
-    p = 2 * (1 - normal_cdf(abs(z)))
-    
-    if p < alpha:
-        trend = 'increasing' if s > 0 else 'decreasing'
-    else:
-        trend = 'no trend'
-        
-    slopes = []
-    for k in range(n - 1):
-        for j in range(k + 1, n):
-            dx = indices[j] - indices[k]
-            if dx != 0:
-                slopes.append((x[j] - x[k]) / dx)
-    
-    slope = float(np.median(slopes)) if slopes else 0.0
-    intercept = float(np.median(x) - slope * np.median(indices))
-    
-    return trend, float(p), slope, intercept
-
 def _patient_for(patient_id):
     """Look up the patient and enforce ownership: superuser sees all, therapists
     only their own."""
@@ -208,19 +151,6 @@ def patient_report(patient_id):
 def patient_report_data(patient_id):
     patient = _patient_for(patient_id)
 
-    # Slider params with safe defaults / clamps.
-    try:
-        window = int(request.args.get('window', 10))
-    except (TypeError, ValueError):
-        window = 10
-    window = max(2, min(window, 1000))
-
-    try:
-        threshold_k = float(request.args.get('threshold', 2.0))
-    except (TypeError, ValueError):
-        threshold_k = 2.0
-    threshold_k = max(0.5, min(threshold_k, 5.0))
-
     try:
         visible = int(request.args.get('visible', 14))
     except (TypeError, ValueError):
@@ -237,7 +167,8 @@ def patient_report_data(patient_id):
     except (TypeError, ValueError):
         p_alpha = 0.05
 
-    calls = (
+    # 1. Fetch Target Patient Calls
+    patient_calls = (
         Call.query
         .filter(Call.patient_phone == patient.phone)
         .filter(Call.is_processed == True)  # noqa: E712
@@ -247,132 +178,198 @@ def patient_report_data(patient_id):
         .all()
     )
 
-    # Full-history per-call arrays (used for baseline)
-    all_dates = [c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None for c in calls]
-    all_call_ids = [c.id for c in calls]
-    all_treatments = [c.patient_treatment for c in calls]
-    all_utms = [_utm_source(c.patient_utm_params) for c in calls]
-    all_genders = [c.patient_gender for c in calls]
-    all_ages = [_age_at(c.patient_birth_year, c.created_at) for c in calls]
-    all_contexts = [
-        f"{t or '∅'} | {u or '∅'} | {g or '∅'}"
-        for t, u, g in zip(all_treatments, all_utms, all_genders)
-    ]
-    all_net_talk = [_extract_net_talk(c.prosody_results) for c in calls]
-    all_patient_topics = [(c.topics.get('patient_topics', []) if c.topics else []) for c in calls]
-
-    # Decide the display slice — the last `visible` calls.
-    n_total = len(calls)
-    n_show = min(visible, n_total)
-    start = n_total - n_show
-
-    metrics = {}
-    for key, label, extractor in METRICS:
-        all_values = [extractor(c.prosody_results) for c in calls]
-        mean, std, n = _baseline_stats(all_values, window)  # baseline from full history
-        if mean is None or std is None:
-            low = high = None
-        else:
-            low = mean - threshold_k * std
-            high = mean + threshold_k * std
-        
-        all_out_of_band = [
-            (v is not None and low is not None and (v < low or v > high))
-            for v in all_values
-        ]
-
-        # Sliced to display range
-        values = all_values[start:]
-        out_of_band = all_out_of_band[start:]
-        net_talk_slice = all_net_talk[start:]
-
-        # MK Trend calculation on the VISIBLE slice, considering net_talk_threshold
-        trend_input = []
-        trend_indices = []
-        for i, (v, nt) in enumerate(zip(values, net_talk_slice)):
-            if v is not None and nt is not None and nt >= net_talk_threshold:
-                trend_input.append(v)
-                trend_indices.append(i)
-        
-        trend_res, p_val, slope, intercept = mann_kendall_test(trend_input, trend_indices, alpha=p_alpha)
-
-        metrics[key] = {
-            'label': label,
-            'values': values,
-            'mean': mean,
-            'std': std,
-            'baseline_n': n,
-            'threshold_low': low,
-            'threshold_high': high,
-            'out_of_band': out_of_band,
-            'out_of_band_count': sum(1 for x in out_of_band if x),
-            'trend': trend_res,
-            'p_value': p_val,
-            'slope': slope,
-            'intercept': intercept
-        }
-
-    # --- Population Comparison: Multivariate Outlier Detection ---
-    # As requested by the analytics team, this replaces the 1D Welch's t-test on S-scalars.
-    # Instead of comparing means, we treat each patient call as a point in a 5D feature space
-    # (Pause, Spiking, F0, Jitter, CPP). We compute the Mahalanobis Distance (D^2) of the 
-    # target patient's centroid against the global population's covariance matrix.
-    # 
-    # Mahalanobis distance acts as a correlation-aware, multivariate generalization of a z-score.
-    # Assuming the population cloud is roughly multivariate normal, D^2 follows a Chi-squared 
-    # distribution with k=5 degrees of freedom. We use the Chi-squared CDF to compute the exact 
-    # probability (p-value) of observing a point at least this extreme by chance.
-    
     import numpy as np
+    from sklearn.decomposition import PCA
 
-    def _extract_vector(pr):
+    def _extract_5d_vector(pr):
         if not isinstance(pr, dict): return None
+        
+        # We need the base metrics: pause, spiking, f0, jitter, cpp
+        # Fallback to the 'v' array in 'stats' if pre-computed, but since we are doing
+        # raw un-normalized values, it's safer to extract the raw values directly.
+        # However, the user's `prosody.py` calculates them as `x1..x5`.
+        # For this prototype, we'll extract the raw values assuming they exist,
+        # or fallback to the pre-computed 'v' vector from the dictionary.
+        
         stats_dict = pr.get('stats')
         if not stats_dict: return None
-        v = stats_dict.get('v')
-        if not isinstance(v, list) or len(v) != 5: return None
-        return v
+        
+        # The user's prosody.py calculates 'v' as normalized. We need raw to calculate mean.
+        # But wait, the user's spec says "find the mean of each parameter".
+        # Let's extract the raw features from `prosody_results`.
+        
+        pause = _safe_float(pr.get('pause_duration'))
+        spiking = _safe_float(pr.get('spiking_rate'))
+        f0 = _safe_float(pr.get('f0_variability_hz'))
+        vqs = pr.get('voice_quality_stats', {})
+        jitter = _safe_float(vqs.get('jitter_local'))
+        cpp = _safe_float(pr.get('cpp'))
+        
+        # If raw aren't available in top level (legacy calls), try to fallback 
+        # to the 'dictionary' mapping in 'stats' if it existed, but it's risky.
+        # We will require all 5 raw metrics to be present.
+        if None in (pause, spiking, f0, jitter, cpp):
+            return None
+            
+        return [pause, spiking, f0, jitter, cpp]
 
-    # 1. Extract valid 5D vectors for the target patient
-    target_vectors = []
-    for pr, nt in zip((c.prosody_results for c in calls[start:]), net_talk_slice):
-        if pr is not None and nt is not None and nt >= net_talk_threshold:
-            vec = _extract_vector(pr)
-            if vec is not None:
-                target_vectors.append(vec)
-
-    # 2. Efficiently fetch ALL other prosody results to check net_talk and extract 5D vectors
-    other_results = Call.query.with_entities(Call.prosody_results).filter(
-        Call.patient_phone != patient.phone,
+    # --- Step A: Build the Global Centered Cloud ---
+    # Fetch ALL processed calls from ALL patients
+    all_calls = Call.query.filter(
         Call.is_processed == True,
         Call.prosody_results.isnot(None)
     ).all()
 
-    other_vectors = []
-    for (pr,) in other_results:
-        nt = _extract_net_talk(pr)
+    # Group by patient phone
+    calls_by_patient = {}
+    for c in all_calls:
+        nt = _extract_net_talk(c.prosody_results)
         if nt is not None and nt >= net_talk_threshold:
-            vec = _extract_vector(pr)
+            vec = _extract_5d_vector(c.prosody_results)
             if vec is not None:
-                other_vectors.append(vec)
+                phone = c.patient_phone
+                if phone not in calls_by_patient:
+                    calls_by_patient[phone] = []
+                # Also store the call ID so we can match it back for the target patient
+                calls_by_patient[phone].append({'id': c.id, 'vec': vec})
 
-    s_p_value = None
-    if len(target_vectors) >= 1 and len(other_vectors) > 5:
-        try:
-            # Calculate centroids and covariance
-            target_centroid = np.mean(target_vectors, axis=0)
-            pop_centroid = np.mean(other_vectors, axis=0)
-            pop_cov = np.cov(other_vectors, rowvar=False)
+    X_normal_list = []
+    
+    # Calculate patient means and center their calls
+    for phone, p_calls in calls_by_patient.items():
+        if len(p_calls) < 2:
+            continue # Need at least 2 calls to have a meaningful mean/variance
+            
+        vectors = np.array([c['vec'] for c in p_calls])
+        
+        # Special logic for target patient: Exclude the last 2 calls from mean calculation
+        if phone == patient.phone and len(vectors) > 2:
+            patient_mean = np.mean(vectors[:-2], axis=0)
+        else:
+            patient_mean = np.mean(vectors, axis=0)
+            
+        # Center all calls for this patient
+        centered_vectors = vectors - patient_mean
+        X_normal_list.extend(centered_vectors)
 
-            # Mahalanobis distance squared (D^2 = (x - u)' * inv(Cov) * (x - u))
-            inv_cov = np.linalg.pinv(pop_cov)
-            diff = target_centroid - pop_centroid
-            d_squared = np.dot(np.dot(diff, inv_cov), diff)
+    # --- Step B: PCA Whitening ---
+    if len(X_normal_list) < 5:
+        # Not enough data globally to fit 5D PCA
+        return jsonify({'error': 'Insufficient global data to build PCA cloud (need > 5 calls).'})
+        
+    X_normal = np.array(X_normal_list)
+    pca = PCA(whiten=True)
+    pca.fit(X_normal)
+    Z_normal = pca.transform(X_normal)
 
-            # Convert to p-value using Chi-Squared CDF (5 degrees of freedom for 5D vector)
-            s_p_value = float(1.0 - stats.chi2.cdf(d_squared, 5))
-        except Exception:
-            s_p_value = None
+    # --- Step B.2: 2D Projection for Visualization ---
+    # We fit a second PCA just to project the 5D whitened data down to 2D for the scatter plot
+    pca_2d = PCA(n_components=2)
+    pca_2d.fit(Z_normal)
+    Z_normal_2d = pca_2d.transform(Z_normal)
+    
+    # We will sample up to 300 points from the global cloud for background context in the UI
+    import random
+    if len(Z_normal_2d) > 300:
+        indices = np.random.choice(len(Z_normal_2d), 300, replace=False)
+        bg_cloud = Z_normal_2d[indices].tolist()
+    else:
+        bg_cloud = Z_normal_2d.tolist()
+
+    # --- Step C & D: Check target patient's specific calls ---
+    target_data = calls_by_patient.get(patient.phone, [])
+    
+    # Map valid Call IDs to their Z_new vectors and p-values
+    anomaly_scores = {}
+    
+    if target_data:
+        t_vectors = np.array([c['vec'] for c in target_data])
+        # Re-calculate the exact same mean we used above (excluding last 2 if > 2)
+        if len(t_vectors) > 2:
+            t_mean = np.mean(t_vectors[:-2], axis=0)
+        else:
+            t_mean = np.mean(t_vectors, axis=0)
+            
+        # Center the target patient's calls
+        X_new = t_vectors - t_mean
+        
+        # Transform (Whiten) the target patient's calls
+        Z_new_all = pca.transform(X_new)
+        
+        # Also project the target patient's calls into 2D for the scatter plot
+        Z_new_all_2d = pca_2d.transform(Z_new_all)
+        
+        n_normal = len(Z_normal)
+        
+        for i, call_info in enumerate(target_data):
+            Z_new = Z_new_all[i]
+            z_norm = np.linalg.norm(Z_new)
+            
+            if z_norm < 1e-9:
+                p_value = 1.0
+            else:
+                u = Z_new / z_norm
+                proj_cloud = Z_normal @ u
+                proj_Z = Z_new @ u
+                
+                behind = np.sum(proj_cloud >= proj_Z)
+                p_value = (behind + 1) / (n_normal + 1)
+            
+            z_2d = Z_new_all_2d[i]
+            # Calculate angle in 2D space (in degrees)
+            angle = float(np.degrees(np.arctan2(z_2d[1], z_2d[0])))
+            
+            anomaly_scores[call_info['id']] = {
+                'p_value': float(p_value),
+                'x': float(z_2d[0]),
+                'y': float(z_2d[1]),
+                'dist': float(z_norm),
+                'angle': angle
+            }
+
+    # Prepare final UI arrays (slice to `visible`)
+    n_total = len(patient_calls)
+    n_show = min(visible, n_total)
+    start = n_total - n_show
+    
+    display_calls = patient_calls[start:]
+    
+    dates = []
+    call_ids = []
+    treatments = []
+    utms = []
+    genders = []
+    ages = []
+    patient_topics = []
+    
+    # We will pass the p-values and 2D data directly
+    call_p_values = []
+    is_anomaly = []
+    pca_2d_points = []
+    
+    for c in display_calls:
+        dates.append(c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None)
+        call_ids.append(c.id)
+        treatments.append(c.patient_treatment)
+        utms.append(_utm_source(c.patient_utm_params))
+        genders.append(c.patient_gender)
+        ages.append(_age_at(c.patient_birth_year, c.created_at))
+        patient_topics.append(c.topics.get('patient_topics', []) if c.topics else [])
+        
+        score_data = anomaly_scores.get(c.id)
+        if score_data:
+            call_p_values.append(score_data['p_value'])
+            is_anomaly.append(score_data['p_value'] < p_alpha)
+            pca_2d_points.append({
+                'x': score_data['x'],
+                'y': score_data['y'],
+                'dist': score_data['dist'],
+                'angle': score_data['angle']
+            })
+        else:
+            call_p_values.append(None)
+            is_anomaly.append(False)
+            pca_2d_points.append(None)
 
     return jsonify({
         'patient': {
@@ -384,24 +381,22 @@ def patient_report_data(patient_id):
             'treatment': patient.treatment,
             'utm_source': _utm_source(patient.utm_params),
         },
-        'window': window,
-        'threshold_k': threshold_k,
         'visible': visible,
         'net_talk_threshold': net_talk_threshold,
         'p_value_threshold': p_alpha,
         'n_calls': n_total,
         'n_visible': n_show,
-        'dates':      all_dates[start:],
-        'call_ids':   all_call_ids[start:],
-        'treatments': all_treatments[start:],
-        'utms':       all_utms[start:],
-        'genders':    all_genders[start:],
-        'ages':       all_ages[start:],
-        'contexts':   all_contexts[start:],
-        'patient_topics': all_patient_topics[start:],
-        'metrics': metrics,
-        's_scalar_p_value': float(s_p_value) if s_p_value is not None else None,
-        's_scalar_status': 'DIFFERENT' if (s_p_value is not None and s_p_value < 0.05) else 'Normal'
+        'dates':      dates,
+        'call_ids':   call_ids,
+        'treatments': treatments,
+        'utms':       utms,
+        'genders':    genders,
+        'ages':       ages,
+        'patient_topics': patient_topics,
+        'call_p_values': call_p_values,
+        'is_anomaly': is_anomaly,
+        'pca_2d_points': pca_2d_points,
+        'bg_cloud': bg_cloud
     })
 
 

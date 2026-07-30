@@ -16,25 +16,6 @@
             </span>
         </h3>
     </div>
-    <div class="panel-body">
-        <!-- 30-second summary banner: one badge per metric -->
-        <div class="row" id="summaryBanner">
-            {% for key, label in [
-                ('s_scalar', 'S'),
-                ('f0_variability_hz_v', 'F0 Var (v)'),
-                ('jitter_local_v', 'Jitter (v)'),
-                ('pause_duration_v', 'Pause Dur (v)'),
-                ('spiking_rate_v', 'Spiking (v)'),
-                ('cpp_v', 'CPP (v)')
-            ] %}
-            <div class="col-md-2">
-                <div id="summary_{{ key }}" class="alert alert-info" style="margin-bottom: 0; padding: 10px; font-size: 12px;">
-                    <strong>{{ label }}:</strong> <span class="msg">loading…</span>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
 </div>
 
 <!-- Controls -->
@@ -53,22 +34,10 @@
             <span id="netTalkThresholdValue" style="font-weight: bold;">30</span>
         </div>
         <div class="form-group" style="margin-right: 20px;">
-            <label for="pAlphaInput">Trend p-α:</label>
-            <input id="pAlphaInput" type="range" min="0.0001" max="1.0" step="0.0001"
+            <label for="pAlphaInput">Anomaly Threshold p-α:</label>
+            <input id="pAlphaInput" type="range" min="0.0001" max="1.0" step="0.0001" value="0.05"
                    style="vertical-align: middle; width: 100px;" autocomplete="off" />
-            <span id="pAlphaValue" style="font-weight: bold;"></span>
-        </div>
-        <div class="form-group" style="margin-right: 20px;">
-            <label for="windowInput">Baseline:</label>
-            <input id="windowInput" type="range" min="2" max="100" value="10"
-                   style="vertical-align: middle; width: 100px;" />
-            <span id="windowValue" style="font-weight: bold;">10</span>
-        </div>
-        <div class="form-group" style="margin-right: 20px;">
-            <label for="thresholdInput">±k·STD:</label>
-            <input id="thresholdInput" type="range" min="0.5" max="5" step="0.1" value="2.0"
-                   style="vertical-align: middle; width: 100px;" />
-            <span id="thresholdValue" style="font-weight: bold;">2.0</span>
+            <span id="pAlphaValue" style="font-weight: bold;">0.05</span>
         </div>
         <span class="text-muted" id="loadingIndicator" style="display:none;">
             <span class="glyphicon glyphicon-refresh spinning"></span>
@@ -76,35 +45,30 @@
     </form>
 </div>
 
-<!-- Charts -->
-<div id="chartsContainer">
-    {% for key, label, _ in [
-        ('s_scalar', 'S', ''),
-        ('f0_variability_hz_v', 'F0 Variability (v)', ''),
-        ('jitter_local_v', 'Jitter Local (v)', ''),
-        ('pause_duration_v', 'Pause Duration (v)', ''),
-        ('spiking_rate_v', 'Spiking Rate (v)', ''),
-        ('cpp_v', 'CPP (v)', '')
-    ] %}
-    <div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-        <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
-            <div class="row">
-                <div class="col-md-6">
-                    <strong style="font-size: 16px;">{{ label }}</strong>
-                    <span id="stats_{{ key }}" class="text-muted small" style="margin-left: 10px;"></span>
-                </div>
-                <div class="col-md-6 text-right" id="badge_{{ key }}">
-                    <!-- MK Badge goes here -->
-                </div>
-            </div>
-        </div>
-        <div class="panel-body" style="padding: 10px;">
-            <div style="height: 300px; position: relative;">
-                <canvas id="chart_{{ key }}"></canvas>
-            </div>
+<!-- Single Anomaly Chart -->
+<div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+    <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
+        <strong style="font-size: 16px;">Call Anomaly Scores (Radial Depth)</strong>
+        <span class="text-muted small" style="margin-left: 10px;">Lower p-value = Higher Anomaly</span>
+    </div>
+    <div class="panel-body" style="padding: 10px;">
+        <div style="height: 300px; position: relative;">
+            <canvas id="chart_anomaly"></canvas>
         </div>
     </div>
-    {% endfor %}
+</div>
+
+<!-- 2D PCA Projection Chart -->
+<div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+    <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
+        <strong style="font-size: 16px;">5D Cloud Projection (PCA 2D)</strong>
+        <span class="text-muted small" style="margin-left: 10px;">Visualizing distance and angle relative to the global norm.</span>
+    </div>
+    <div class="panel-body" style="padding: 10px;">
+        <div style="height: 400px; position: relative;">
+            <canvas id="chart_pca"></canvas>
+        </div>
+    </div>
 </div>
 
 <div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
@@ -121,8 +85,7 @@
 <div class="well well-sm">
     <small>
         <strong>How to read:</strong>
-        Solid blue line shows real data points. Shaded green band represents the patient's baseline (mean ±k·STD).
-        Dashed red line indicates the calculated MK trend. Points are included in trend calculation only if Net Patient Speech exceeds the set threshold.
+        Points below the red threshold line are considered statistically significant anomalies compared to the patient's own historical baseline.
         <strong>Click any point</strong> to see that call's conversation and extracted topics.
     </small>
 </div>
@@ -171,7 +134,7 @@
 <style>
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
-#chartsContainer canvas { cursor: pointer; }
+#chart_anomaly { cursor: pointer; }
 
 /* Modal and Topic Pills Styles */
 .topics-pills { margin-top: 4px; }
@@ -203,77 +166,228 @@
 </style>
 <script>
 const PATIENT_ID = {{ patient.id }};
-const METRIC_KEYS = ['s_scalar', 'f0_variability_hz_v', 'jitter_local_v', 'pause_duration_v', 'spiking_rate_v', 'cpp_v'];
-const METRIC_UNITS = {
-    pause_duration_v: '',
-    spiking_rate_v: '',
-    f0_variability_hz_v: '',
-    jitter_local_v: '',
-    cpp_v: '',
-    s_scalar: ''
-};
+let anomalyChart = null;
+let topicsChart = null;
+let pcaChart = null;
 
-const charts = {};
+function renderPcaChart(d) {
+    const ctx = document.getElementById('chart_pca').getContext('2d');
+    
+    if (pcaChart) pcaChart.destroy();
+    
+    if (!d.pca_2d_points || d.pca_2d_points.length === 0) return;
 
-function renderChart(metricKey, d) {
-    const m = d.metrics[metricKey];
-    const elId = 'chart_' + metricKey;
-    const ctx = document.getElementById(elId).getContext('2d');
-    const unit = METRIC_UNITS[metricKey];
+    // 1. Background cloud (Global Norm)
+    const bgData = d.bg_cloud ? d.bg_cloud.map(pt => ({x: pt[0], y: pt[1]})) : [];
+
+    // 2. Patient's Historical Calls (Grey)
+    const histData = [];
+    // 3. Patient's Last 2 Calls (Highlighted)
+    const last2Data = [];
+    
+    const n = d.pca_2d_points.length;
+    const startIdx = d.n_calls - d.n_visible;
+    
+    d.pca_2d_points.forEach((pt, i) => {
+        if (!pt) return;
+        const dataPoint = {
+            x: pt.x, 
+            y: pt.y, 
+            dist: pt.dist, 
+            angle: pt.angle, 
+            abs_call_num: startIdx + i + 1,
+            call_id: d.call_ids[i],
+            date: d.dates[i],
+            is_anomaly: d.is_anomaly[i]
+        };
+        
+        if (i >= n - 2) {
+            last2Data.push(dataPoint);
+        } else {
+            histData.push(dataPoint);
+        }
+    });
+
+    // Build dynamic annotations (Axes, Arrows, Tangents)
+    let dynamicAnnotations = {
+        originX: {
+            type: 'line',
+            yMin: 0,
+            yMax: 0,
+            borderColor: 'rgba(0, 0, 0, 0.8)',
+            borderWidth: 1
+        },
+        originY: {
+            type: 'line',
+            xMin: 0,
+            xMax: 0,
+            borderColor: 'rgba(0, 0, 0, 0.8)',
+            borderWidth: 1
+        }
+    };
+    
+    // Add Arrows and Tangents for the last 2 calls
+    last2Data.forEach((pt, index) => {
+        // Arrow from 0,0 to the point
+        dynamicAnnotations[`radial_${index}`] = {
+            type: 'line',
+            xMin: 0,
+            yMin: 0,
+            xMax: pt.x,
+            yMax: pt.y,
+            borderColor: 'rgba(255, 127, 14, 0.8)',
+            borderWidth: 2,
+            arrowHeads: {
+                end: {
+                    display: true,
+                    fill: true,
+                    length: 8,
+                    width: 8
+                }
+            }
+        };
+
+        // Perpendicular Tangent Line
+        // Radial vector is (pt.x, pt.y). Perpendicular vector is (-pt.y, pt.x).
+        // Normalize the perpendicular vector
+        const L = Math.sqrt(pt.x*pt.x + pt.y*pt.y);
+        if (L > 0.001) {
+            const tangentLength = 2.0; // Extend line 2 units in both directions
+            const ux_perp = -pt.y / L;
+            const uy_perp = pt.x / L;
+            
+            dynamicAnnotations[`tangent_${index}`] = {
+                type: 'line',
+                xMin: pt.x - tangentLength * ux_perp,
+                yMin: pt.y - tangentLength * uy_perp,
+                xMax: pt.x + tangentLength * ux_perp,
+                yMax: pt.y + tangentLength * uy_perp,
+                borderColor: pt.is_anomaly ? 'rgba(214, 39, 40, 0.8)' : 'rgba(100, 100, 100, 0.5)',
+                borderWidth: 2,
+                borderDash: [5, 5]
+            };
+        }
+    });
+
+    let maxAbsValue = 1;
+    [...bgData, ...histData, ...last2Data].forEach(pt => {
+        if (Math.abs(pt.x) > maxAbsValue) maxAbsValue = Math.abs(pt.x);
+        if (Math.abs(pt.y) > maxAbsValue) maxAbsValue = Math.abs(pt.y);
+    });
+    // Add 10% padding
+    maxAbsValue = maxAbsValue * 1.1;
+
+    pcaChart = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+            datasets: [
+                {
+                    label: 'Global Reference Cloud',
+                    data: bgData,
+                    backgroundColor: 'rgba(200, 200, 200, 0.3)',
+                    pointRadius: 2,
+                    borderWidth: 0
+                },
+                {
+                    label: 'Patient History',
+                    data: histData,
+                    backgroundColor: histData.map(pt => pt.is_anomaly ? '#d62728' : '#7f7f7f'),
+                    pointStyle: histData.map(pt => pt.is_anomaly ? 'star' : 'circle'),
+                    pointRadius: histData.map(pt => pt.is_anomaly ? 8 : 5),
+                    borderColor: '#555',
+                    borderWidth: 1
+                },
+                {
+                    label: 'Patient Last 2 Calls',
+                    data: last2Data,
+                    backgroundColor: last2Data.map(pt => pt.is_anomaly ? '#d62728' : '#ff7f0e'),
+                    pointStyle: last2Data.map(pt => pt.is_anomaly ? 'star' : 'triangle'),
+                    pointRadius: last2Data.map(pt => pt.is_anomaly ? 12 : 10),
+                    borderColor: '#333',
+                    borderWidth: 2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            aspectRatio: 1, // Force square container
+            onClick: (e, elements) => {
+                if (elements.length > 0) {
+                    const el = elements[0];
+                    if (el.datasetIndex > 0) {
+                        const pt = pcaChart.data.datasets[el.datasetIndex].data[el.index];
+                        if (pt && pt.call_id) openConversationModal(pt.call_id);
+                    }
+                }
+            },
+            plugins: {
+                legend: { position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: (context) => {
+                            if (context.datasetIndex === 0) return 'Global Point';
+                            const pt = context.raw;
+                            return [
+                                `${context.dataset.label} (Call #${pt.abs_call_num})`,
+                                `Date: ${pt.date}`,
+                                `Distance from center: ${pt.dist.toFixed(2)}`,
+                                `Angle: ${pt.angle.toFixed(1)}°`
+                            ];
+                        }
+                    }
+                },
+                annotation: {
+                    annotations: dynamicAnnotations
+                }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'PCA Component 1' },
+                    min: -maxAbsValue,
+                    max: maxAbsValue
+                },
+                y: {
+                    title: { display: true, text: 'PCA Component 2' },
+                    min: -maxAbsValue,
+                    max: maxAbsValue
+                }
+            }
+        }
+    });
+}
+
+function renderAnomalyChart(d) {
+    const ctx = document.getElementById('chart_anomaly').getContext('2d');
     const pAlpha = parseFloat(document.getElementById('pAlphaInput').value);
 
-    // Update Badge
-    const badgeEl = document.getElementById('badge_' + metricKey);
-    if (m.trend === 'no trend' || m.p_value >= pAlpha) {
-        badgeEl.innerHTML = '<span class="label label-default" style="font-size: 13px;">STABLE / NO SIGNIFICANT TREND</span>';
-    } else {
-        const color = (m.trend === 'increasing') ? '#d9534f' : '#5cb85c';
-        badgeEl.innerHTML = `<span class="label" style="font-size: 13px; background-color: ${color};">SIGNIFICANT ${m.trend.toUpperCase()} TREND (p=${m.p_value.toFixed(3)})</span>`;
-    }
+    if (anomalyChart) anomalyChart.destroy();
 
-    // Update Stats text
-    const statsEl = document.getElementById('stats_' + metricKey);
-    if (m.mean != null) {
-        statsEl.textContent = `— baseline n=${m.baseline_n}, mean=${m.mean.toFixed(2)}${unit}, band=[${m.threshold_low.toFixed(2)}, ${m.threshold_high.toFixed(2)}]`;
-    }
-
-    if (charts[elId]) charts[elId].destroy();
-
-    const xLabels = d.dates.map((date, i) => `Call #${i+1}`);
+    const startIdx = d.n_calls - d.n_visible;
+    const xLabels = d.dates.map((date, i) => `Call #${startIdx + i + 1}`);
     
-    // Trend line points
-    const trendData = d.dates.map((_, i) => m.intercept + m.slope * i);
+    // Replace null p-values with a safe visualization value (like 1.0) so they don't break the chart
+    const plotValues = d.call_p_values.map(v => v === null ? 1.0 : v);
 
-    charts[elId] = new Chart(ctx, {
+    anomalyChart = new Chart(ctx, {
         type: 'line',
         data: {
             labels: xLabels,
             datasets: [
                 {
-                    label: m.label,
-                    data: m.values,
+                    label: 'Anomaly P-Value',
+                    data: plotValues,
                     borderColor: '#1f77b4',
-                    backgroundColor: m.out_of_band.map(out => out ? '#d62728' : '#1f77b4'),
+                    backgroundColor: 'rgba(31, 119, 180, 0.1)',
+                    pointBackgroundColor: d.is_anomaly.map(anom => anom ? '#d62728' : '#1f77b4'),
+                    pointBorderColor: d.is_anomaly.map(anom => anom ? '#d62728' : '#1f77b4'),
                     borderWidth: 2,
-                    pointRadius: m.out_of_band.map(out => out ? 6 : 4),
-                    pointStyle: m.out_of_band.map(out => out ? 'rectRot' : 'circle'),
+                    pointRadius: d.is_anomaly.map(anom => anom ? 8 : 4),
+                    pointStyle: d.is_anomaly.map(anom => anom ? 'star' : 'circle'),
                     tension: 0.1,
                     segment: {
-                        borderColor: ctx => {
-                            const idx = ctx.p1DataIndex;
-                            // Change color if context changed? (Keep it simple for now)
-                            return '#1f77b4';
-                        }
+                        borderColor: ctx => '#1f77b4'
                     }
-                },
-                {
-                    label: 'MK Trend',
-                    data: trendData,
-                    borderColor: '#d62728',
-                    borderDash: [5, 5],
-                    pointRadius: 0,
-                    fill: false,
-                    borderWidth: 2
                 }
             ]
         },
@@ -293,7 +407,9 @@ function renderChart(metricKey, d) {
                     callbacks: {
                         afterBody: (context) => {
                             const i = context[0].dataIndex;
+                            const pval = d.call_p_values[i];
                             return [
+                                `P-Value: ${pval !== null ? pval.toFixed(4) : 'N/A'}`,
                                 `Date: ${d.dates[i]}`,
                                 `Treatment: ${d.treatments[i] || '—'}`,
                                 `UTM: ${d.utms[i] || '—'}`,
@@ -305,28 +421,29 @@ function renderChart(metricKey, d) {
                 },
                 annotation: {
                     annotations: {
-                        band: {
-                            type: 'box',
-                            yMin: m.threshold_low,
-                            yMax: m.threshold_high,
-                            backgroundColor: 'rgba(92, 184, 92, 0.1)',
-                            borderWidth: 0,
-                        },
-                        mean: {
+                        threshold: {
                             type: 'line',
-                            yMin: m.mean,
-                            yMax: m.mean,
-                            borderColor: 'rgba(92, 184, 92, 0.5)',
-                            borderWidth: 1,
-                            borderDash: [2, 2],
+                            yMin: pAlpha,
+                            yMax: pAlpha,
+                            borderColor: 'rgba(214, 39, 40, 0.8)',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            label: {
+                                display: true,
+                                content: `Threshold (p=${pAlpha})`,
+                                position: 'start',
+                                backgroundColor: 'rgba(214, 39, 40, 0.8)'
+                            }
                         }
                     }
                 }
             },
             scales: {
                 y: {
-                    title: { display: true, text: unit },
-                    beginAtZero: false
+                    title: { display: true, text: 'P-Value' },
+                    min: 0,
+                    max: 1.0,
+                    reverse: true // Invert the Y axis so lower p-values (higher anomaly) are at the top
                 },
                 x: {
                     title: { display: true, text: 'Calls' }
@@ -337,10 +454,9 @@ function renderChart(metricKey, d) {
 }
 
 function renderTopicChart(d) {
-    const elId = 'chart_topics';
-    const ctx = document.getElementById(elId).getContext('2d');
+    const ctx = document.getElementById('chart_topics').getContext('2d');
     
-    if (charts[elId]) charts[elId].destroy();
+    if (topicsChart) topicsChart.destroy();
 
     // Unique topics
     const allTopicsSet = new Set();
@@ -360,10 +476,10 @@ function renderTopicChart(d) {
         };
     });
 
-    charts[elId] = new Chart(ctx, {
+    topicsChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: d.dates.map((_, i) => `Call #${i+1}`),
+            labels: d.dates.map((_, i) => `Call #${(d.n_calls - d.n_visible) + i + 1}`),
             datasets: datasets
         },
         options: {
@@ -398,52 +514,13 @@ const SEGMENT_PALETTE = [
     '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#d62728'
 ];
 
-function renderSummary(metricKey, d) {
-    const m = d.metrics[metricKey];
-    const el = document.getElementById('summary_' + metricKey);
-    const msg = el.querySelector('.msg');
-    el.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger');
-
-    if (metricKey === 's_scalar' && d.s_scalar_p_value !== null && d.s_scalar_p_value !== undefined) {
-        // Render P-Value for S Scalar
-        const pval = d.s_scalar_p_value.toFixed(4);
-        msg.innerHTML = `Pop. Diff p: ${pval} <strong>(${d.s_scalar_status})</strong>`;
-        if (d.s_scalar_status === 'DIFFERENT') {
-            el.classList.add('alert-danger');
-        } else {
-            el.classList.add('alert-success');
-        }
-        return;
-    }
-
-    if (m.mean == null) {
-        msg.textContent = 'no data';
-        el.classList.add('alert-info');
-        return;
-    }
-    const total = m.values.filter(v => v != null).length;
-    const out = m.out_of_band_count;
-    const pct = total ? Math.round(100 * out / total) : 0;
-    msg.textContent = `${out}/${total} (${pct}%)`;
-    if (out === 0)      el.classList.add('alert-success');
-    else if (pct < 25)  el.classList.add('alert-warning');
-    else                el.classList.add('alert-danger');
-}
-
-let isFirstLoad = true;
 
 function loadReport() {
-    const window_ = document.getElementById('windowInput').value;
-    const threshold = document.getElementById('thresholdInput').value;
     const visible = document.getElementById('visibleInput').value;
     const netTalkThr = document.getElementById('netTalkThresholdInput').value;
     const pAlphaInput = document.getElementById('pAlphaInput');
-    
-    // Ignore slider value on first load so we can override it
-    const pAlpha = isFirstLoad ? null : pAlphaInput.value;
+    const pAlpha = pAlphaInput.value;
 
-    document.getElementById('windowValue').textContent = window_;
-    document.getElementById('thresholdValue').textContent = parseFloat(threshold).toFixed(1);
     document.getElementById('visibleValue').textContent = visible;
     document.getElementById('netTalkThresholdValue').textContent = netTalkThr;
     
@@ -454,8 +531,6 @@ function loadReport() {
     document.getElementById('loadingIndicator').style.display = '';
 
     const ajaxData = {
-        window: window_, 
-        threshold: threshold, 
         visible: visible,
         net_talk_threshold: netTalkThr
     };
@@ -471,27 +546,6 @@ function loadReport() {
         success: function(d) {
             document.getElementById('loadingIndicator').style.display = 'none';
             if (d.error) { alert('Error: ' + d.error); return; }
-
-            // On first load, force the slider to match the Population Difference p-value
-            if (isFirstLoad) {
-                let initialAlpha = 0.05;
-                if (d.s_scalar_p_value !== null && d.s_scalar_p_value !== undefined) {
-                     initialAlpha = Math.max(0.0001, Math.min(1.0, d.s_scalar_p_value));
-                }
-                
-                // Format to exactly 4 decimal places
-                initialAlpha = parseFloat(initialAlpha.toFixed(4));
-                
-                pAlphaInput.value = initialAlpha;
-                document.getElementById('pAlphaValue').textContent = initialAlpha;
-                
-                isFirstLoad = false;
-                
-                if (initialAlpha !== 0.05) {
-                    loadReport();
-                    return;
-                }
-            }
             
             const ageStr = d.patient.current_age != null ? d.patient.current_age + 'y' : '?y';
             document.getElementById('patientMeta').textContent =
@@ -503,7 +557,8 @@ function loadReport() {
                 : ' · ' + d.n_calls + ' processed call' + (d.n_calls === 1 ? '' : 's');
             document.getElementById('patientCallCount').textContent = shownText;
             
-            METRIC_KEYS.forEach(k => { renderSummary(k, d); renderChart(k, d); });
+            renderAnomalyChart(d);
+            renderPcaChart(d);
             renderTopicChart(d);
         },
         error: function(xhr) {
@@ -601,8 +656,11 @@ function scheduleLoad() {
 }
 
 $(document).ready(function() {
-    ['visibleInput', 'windowInput', 'thresholdInput', 'netTalkThresholdInput', 'pAlphaInput'].forEach(id => {
-        document.getElementById(id).addEventListener('input', scheduleLoad);
+    ['visibleInput', 'netTalkThresholdInput', 'pAlphaInput'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('input', scheduleLoad);
+        }
     });
     loadReport();
 });
