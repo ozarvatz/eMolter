@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Algo Test - Virtual Patients{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <h1>Algorithm Test Suite</h1>
+        <p class="lead">Test the Radial Depth Anomaly detection using isolated synthetic data.</p>
+    </div>
+    <div class="col-md-4 text-right" style="margin-top: 20px;">
+        <button id="regenBtn" class="btn btn-warning">
+            <span class="glyphicon glyphicon-refresh"></span> Regenerate 100 Virtual Users
+        </button>
+    </div>
+</div>
+
+<hr>
+
+<div id="loadingMsg" style="display:none;" class="alert alert-info">
+    Regenerating 10,000 synthetic calls... please wait.
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="panel panel-default">
+            <div class="panel-heading">Virtual Patient List (Phone Range 001 - 100)</div>
+            <div class="panel-body">
+                <div class="row">
+                    {% for vp in virt_patients %}
+                    <div class="col-md-2 col-sm-3 col-xs-4" style="margin-bottom: 10px;">
+                        <a href="{{ url_for('patient_report', patient_id=0) }}?virtual=true&v_phone={{ vp.phone }}" 
+                           class="btn {% if vp.min_p < 0.02 %}btn-danger{% else %}btn-default{% endif %} btn-block"
+                           style="white-space: normal; line-height: 1.2;">
+                            User {{ vp.phone }}<br>
+                            <small>p={{ "%.3f"|format(vp.min_p) }}</small>
+                        </a>
+                    </div>
+                    {% endfor %}
+                    {% if not virt_patients %}
+                    <div class="col-md-12 text-center text-muted">
+                        No virtual patients found. Click Regenerate to build the test set.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    $('#regenBtn').click(function() {
+        if (!confirm('This will delete all current virtual users and create 100 new ones. Continue?')) return;
+        
+        $('#regenBtn').prop('disabled', true);
+        $('#loadingMsg').show();
+        
+        $.ajax({
+            url: '/api/therapist/algo-test/regenerate',
+            method: 'POST',
+            beforeSend: function(xhr) {
+                xhr.setRequestHeader('X-CSRFToken', "{{ csrf_token() }}");
+            },
+            success: function() {
+                location.reload();
+            },
+            error: function() {
+                alert('Regeneration failed.');
+                $('#regenBtn').prop('disabled', false);
+                $('#loadingMsg').hide();
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

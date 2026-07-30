@@ -141,7 +141,24 @@ def _baseline_stats(values, window):
 @app.route('/therapist/patients/<int:patient_id>/report')
 @login_required
 def patient_report(patient_id):
-    patient = _patient_for(patient_id)
+    is_virtual = request.args.get('virtual') == 'true'
+    v_phone = request.args.get('v_phone')
+    
+    if is_virtual and v_phone:
+        # Create a mock object that duck-types enough for the template
+        class MockPatient:
+            def __init__(self, phone):
+                self.id = 0
+                self.phone = phone
+                self.nickname = f"Virtual User {phone}"
+                self.name = f"Virtual User {phone}"
+                self.treatment = "simulation"
+                self.gender = "virtual"
+                
+        patient = MockPatient(v_phone)
+    else:
+        patient = _patient_for(patient_id)
+        
     return render_template('patient_report.html', patient=patient)
 
 
@@ -149,7 +166,8 @@ def patient_report(patient_id):
 @csrf.exempt
 @login_required
 def patient_report_data(patient_id):
-    patient = _patient_for(patient_id)
+    is_virtual = request.args.get('virtual') == 'true'
+    v_phone = request.args.get('v_phone')
 
     try:
         visible = int(request.args.get('visible', 14))
@@ -163,20 +181,9 @@ def patient_report_data(patient_id):
         net_talk_threshold = 30.0
 
     try:
-        p_alpha = float(request.args.get('p_value_threshold', 0.05))
+        p_alpha = float(request.args.get('p_value_threshold', 0.02))
     except (TypeError, ValueError):
-        p_alpha = 0.05
-
-    # 1. Fetch Target Patient Calls
-    patient_calls = (
-        Call.query
-        .filter(Call.patient_phone == patient.phone)
-        .filter(Call.is_processed == True)  # noqa: E712
-        .filter(Call.prosody_results.isnot(None))
-        .filter(Call.recording_url.isnot(None))
-        .order_by(Call.created_at.asc())
-        .all()
-    )
+        p_alpha = 0.02
 
     import numpy as np
     from sklearn.decomposition import PCA
@@ -214,24 +221,64 @@ def patient_report_data(patient_id):
         return [pause, spiking, f0, jitter, cpp]
 
     # --- Step A: Build the Global Centered Cloud ---
-    # Fetch ALL processed calls from ALL patients
-    all_calls = Call.query.filter(
-        Call.is_processed == True,
-        Call.prosody_results.isnot(None)
-    ).all()
-
-    # Group by patient phone
     calls_by_patient = {}
-    for c in all_calls:
-        nt = _extract_net_talk(c.prosody_results)
-        if nt is not None and nt >= net_talk_threshold:
-            vec = _extract_5d_vector(c.prosody_results)
-            if vec is not None:
-                phone = c.patient_phone
-                if phone not in calls_by_patient:
-                    calls_by_patient[phone] = []
-                # Also store the call ID so we can match it back for the target patient
-                calls_by_patient[phone].append({'id': c.id, 'vec': vec})
+
+    if is_virtual:
+        import os
+        import json
+        json_path = os.path.join(app.root_path, 'virtual_patients.json')
+        if not os.path.exists(json_path):
+            return jsonify({'error': 'Virtual data file not found. Please generate it first.'})
+        with open(json_path, 'r') as f:
+            virt_db = json.load(f)
+            
+        if v_phone not in virt_db:
+            return jsonify({'error': f'Virtual patient {v_phone} not found.'})
+            
+        target_v_calls = virt_db[v_phone]
+        
+        # Mock patient object
+        patient_data = {
+            'name': f"Virtual Patient {v_phone}",
+            'phone': v_phone,
+            'gender': 'virtual',
+            'birth_year': 2000,
+            'current_age': 26,
+            'treatment': 'simulation',
+            'utm_source': 'test-suite'
+        }
+        
+        for phone, v_calls in virt_db.items():
+            calls_by_patient[phone] = [{'id': c['id'], 'vec': c['vec']} for c in v_calls]
+            
+    else:
+        patient = _patient_for(patient_id)
+        patient_data = {
+            'name': patient.nickname or patient.name,
+            'phone': patient.phone,
+            'gender': patient.gender,
+            'birth_year': patient.birth_year,
+            'current_age': _age_at(patient.birth_year, datetime.now()),
+            'treatment': patient.treatment,
+            'utm_source': _utm_source(patient.utm_params),
+        }
+        
+        # Fetch ALL processed calls from ALL patients
+        all_calls = Call.query.filter(
+            Call.is_processed == True,
+            Call.prosody_results.isnot(None)
+        ).all()
+
+        for c in all_calls:
+            nt = _extract_net_talk(c.prosody_results)
+            if nt is not None and nt >= net_talk_threshold:
+                vec = _extract_5d_vector(c.prosody_results)
+                if vec is not None:
+                    phone = c.patient_phone
+                    if phone not in calls_by_patient:
+                        calls_by_patient[phone] = []
+                    # Also store the call ID so we can match it back for the target patient
+                    calls_by_patient[phone].append({'id': c.id, 'vec': vec})
 
     X_normal_list = []
     
@@ -243,7 +290,8 @@ def patient_report_data(patient_id):
         vectors = np.array([c['vec'] for c in p_calls])
         
         # Special logic for target patient: Exclude the last 2 calls from mean calculation
-        if phone == patient.phone and len(vectors) > 2:
+        target_phone = v_phone if is_virtual else patient.phone
+        if phone == target_phone and len(vectors) > 2:
             patient_mean = np.mean(vectors[:-2], axis=0)
         else:
             patient_mean = np.mean(vectors, axis=0)
@@ -277,7 +325,8 @@ def patient_report_data(patient_id):
         bg_cloud = Z_normal_2d.tolist()
 
     # --- Step C & D: Check target patient's specific calls ---
-    target_data = calls_by_patient.get(patient.phone, [])
+    target_phone = v_phone if is_virtual else patient.phone
+    target_data = calls_by_patient.get(target_phone, [])
     
     # Map valid Call IDs to their Z_new vectors and p-values
     anomaly_scores = {}
@@ -328,11 +377,18 @@ def patient_report_data(patient_id):
             }
 
     # Prepare final UI arrays (slice to `visible`)
-    n_total = len(patient_calls)
+    if is_virtual:
+        # In virtual mode, target_v_calls is already sorted
+        all_display_calls = target_v_calls
+    else:
+        # In real mode, fetch from DB
+        all_display_calls = (Call.query.filter(Call.patient_phone == patient.phone, Call.is_processed == True)
+                             .order_by(Call.created_at.asc()).all())
+    
+    n_total = len(all_display_calls)
     n_show = min(visible, n_total)
     start = n_total - n_show
-    
-    display_calls = patient_calls[start:]
+    display_slice = all_display_calls[start:]
     
     dates = []
     call_ids = []
@@ -347,16 +403,27 @@ def patient_report_data(patient_id):
     is_anomaly = []
     pca_2d_points = []
     
-    for c in display_calls:
-        dates.append(c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None)
-        call_ids.append(c.id)
-        treatments.append(c.patient_treatment)
-        utms.append(_utm_source(c.patient_utm_params))
-        genders.append(c.patient_gender)
-        ages.append(_age_at(c.patient_birth_year, c.created_at))
-        patient_topics.append(c.topics.get('patient_topics', []) if c.topics else [])
+    for c in display_slice:
+        if is_virtual:
+            dates.append(c['date'])
+            call_ids.append(c['id'])
+            treatments.append('virtual')
+            utms.append('sim')
+            genders.append('v')
+            ages.append(26)
+            patient_topics.append([])
+            cid = c['id']
+        else:
+            dates.append(c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None)
+            call_ids.append(c.id)
+            treatments.append(c.patient_treatment)
+            utms.append(_utm_source(c.patient_utm_params))
+            genders.append(c.patient_gender)
+            ages.append(_age_at(c.patient_birth_year, c.created_at))
+            patient_topics.append(c.topics.get('patient_topics', []) if c.topics else [])
+            cid = c.id
         
-        score_data = anomaly_scores.get(c.id)
+        score_data = anomaly_scores.get(cid)
         if score_data:
             call_p_values.append(score_data['p_value'])
             is_anomaly.append(score_data['p_value'] < p_alpha)
@@ -372,15 +439,7 @@ def patient_report_data(patient_id):
             pca_2d_points.append(None)
 
     return jsonify({
-        'patient': {
-            'name': patient.nickname or patient.name,
-            'phone': patient.phone,
-            'gender': patient.gender,
-            'birth_year': patient.birth_year,
-            'current_age': _age_at(patient.birth_year, datetime.now()),
-            'treatment': patient.treatment,
-            'utm_source': _utm_source(patient.utm_params),
-        },
+        'patient': patient_data,
         'visible': visible,
         'net_talk_threshold': net_talk_threshold,
         'p_value_threshold': p_alpha,

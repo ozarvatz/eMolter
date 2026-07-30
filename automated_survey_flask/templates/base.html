@@ -28,6 +28,7 @@
                     <li><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
                     <li><a href="{{ url_for('analytics') }}">Analytics</a></li>
                     <li><a href="{{ url_for('patient_list') }}">Patients</a></li>
+                    <li><a href="{{ url_for('algo_test_page') }}">Algo Test</a></li>
                     {% if current_user.is_superuser %}
                         <li><a href="{{ url_for('therapist_list') }}">Therapists</a></li>
                         <li><a href="{{ url_for('prompt_list') }}">Prompts</a></li>
