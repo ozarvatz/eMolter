@@ -220,7 +220,10 @@ def patient_report_data(patient_id):
             
         return [pause, spiking, f0, jitter, cpp]
 
-    # --- Step A: Build the Global Centered Cloud ---
+    # --- STEP A: CENTERING ---
+    # For each patient and each parameter, find the mean and subtract it. 
+    # This centers each patient's parameter cloud at origin (0,0,0,0,0).
+    # All patient clouds are then combined into one "Raw Normal Cloud".
     calls_by_patient = {}
 
     if is_virtual:
@@ -300,7 +303,9 @@ def patient_report_data(patient_id):
         centered_vectors = vectors - patient_mean
         X_normal_list.extend(centered_vectors)
 
-    # --- Step B: PCA Whitening ---
+    # --- STEP B: WHITENING ---
+    # Fix the autocorrelation of the parameters using PCA.
+    # X_normal is the N x 5 raw vector. Z_normal is the whitened reference cloud.
     if len(X_normal_list) < 5:
         # Not enough data globally to fit 5D PCA
         return jsonify({'error': 'Insufficient global data to build PCA cloud (need > 5 calls).'})
@@ -324,7 +329,9 @@ def patient_report_data(patient_id):
     else:
         bg_cloud = Z_normal_2d.tolist()
 
-    # --- Step C & D: Check target patient's specific calls ---
+    # --- STEP C: TRANSFORMATION ---
+    # Given the calls of a new/target patient, center them identically to Step A.
+    # Then apply: Z_new = pca.transform(X_new.reshape(1, -1)) for each call.
     target_phone = v_phone if is_virtual else patient.phone
     target_data = calls_by_patient.get(target_phone, [])
     
@@ -350,6 +357,9 @@ def patient_report_data(patient_id):
         
         n_normal = len(Z_normal)
         
+        # --- STEP D: COMPARISON ---
+        # Take the transformed Z_new point and the whitened Z_normal cloud.
+        # Calculate the radial depth p-value (fraction of cloud at least as extreme as Z_new).
         for i, call_info in enumerate(target_data):
             Z_new = Z_new_all[i]
             z_norm = np.linalg.norm(Z_new)
@@ -413,6 +423,8 @@ def patient_report_data(patient_id):
             ages.append(26)
             patient_topics.append([])
             cid = c['id']
+            # We stored vec directly in the dict
+            raw_vec = c['vec']
         else:
             dates.append(c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None)
             call_ids.append(c.id)
@@ -422,6 +434,7 @@ def patient_report_data(patient_id):
             ages.append(_age_at(c.patient_birth_year, c.created_at))
             patient_topics.append(c.topics.get('patient_topics', []) if c.topics else [])
             cid = c.id
+            raw_vec = _extract_5d_vector(c.prosody_results)
         
         score_data = anomaly_scores.get(cid)
         if score_data:
@@ -431,7 +444,8 @@ def patient_report_data(patient_id):
                 'x': score_data['x'],
                 'y': score_data['y'],
                 'dist': score_data['dist'],
-                'angle': score_data['angle']
+                'angle': score_data['angle'],
+                'raw': raw_vec
             })
         else:
             call_p_values.append(None)

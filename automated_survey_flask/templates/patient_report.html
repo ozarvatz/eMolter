@@ -64,9 +64,22 @@
         <strong style="font-size: 16px;">5D Cloud Projection (PCA 2D)</strong>
         <span class="text-muted small" style="margin-left: 10px;">Visualizing distance and angle relative to the global norm.</span>
     </div>
-    <div class="panel-body" style="padding: 10px;">
-        <div style="height: 400px; position: relative;">
+    <div class="panel-body" style="padding: 10px; display: flex; justify-content: center;">
+        <div style="height: 600px; width: 600px; position: relative;">
             <canvas id="chart_pca"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- 5 Raw Parameters Z-Score Chart -->
+<div class="panel panel-default" style="margin-bottom: 30px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+    <div class="panel-heading" style="background: #f8f9fa; border-bottom: 1px solid #eee; padding: 12px 15px;">
+        <strong style="font-size: 16px;">5 Raw Parameters (Z-Score Normalized)</strong>
+        <span class="text-muted small" style="margin-left: 10px;">Showing relative standard deviations from the mean for Pause, Spiking, Pitch, Jitter, and CPP.</span>
+    </div>
+    <div class="panel-body" style="padding: 10px;">
+        <div style="height: 350px; position: relative;">
+            <canvas id="chart_raw_params"></canvas>
         </div>
     </div>
 </div>
@@ -169,6 +182,98 @@ const PATIENT_ID = {{ patient.id }};
 let anomalyChart = null;
 let topicsChart = null;
 let pcaChart = null;
+let rawParamsChart = null;
+
+function renderRawParamsChart(d) {
+    const ctx = document.getElementById('chart_raw_params').getContext('2d');
+    if (rawParamsChart) rawParamsChart.destroy();
+    if (!d.pca_2d_points || d.pca_2d_points.length === 0) return;
+
+    // 1. Extract valid raw vectors
+    let validRawData = [];
+    d.pca_2d_points.forEach(pt => {
+        if (pt && pt.raw) validRawData.push(pt.raw);
+    });
+
+    if (validRawData.length < 2) return;
+
+    // 2. Calculate mean and std for each of the 5 parameters
+    const means = [0, 0, 0, 0, 0];
+    const stds = [0, 0, 0, 0, 0];
+    const n = validRawData.length;
+
+    for (let i = 0; i < 5; i++) {
+        let sum = 0;
+        validRawData.forEach(vec => { sum += vec[i]; });
+        means[i] = sum / n;
+
+        let variance = 0;
+        validRawData.forEach(vec => { variance += Math.pow(vec[i] - means[i], 2); });
+        stds[i] = Math.sqrt(variance / n) || 1; // Prevent div by zero
+    }
+
+    // 3. Build the 5 datasets (Z-score normalized)
+    const paramNames = ['Pause Duration', 'Spiking Rate', 'F0 Variability', 'Jitter Local', 'CPP'];
+    const paramColors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd', '#8c564b'];
+    
+    const startIdx = d.n_calls - d.n_visible;
+    const xLabels = d.dates.map((date, i) => `Call #${startIdx + i + 1}`);
+
+    const datasets = [];
+    for (let p = 0; p < 5; p++) {
+        const zData = [];
+        d.pca_2d_points.forEach(pt => {
+            if (pt && pt.raw) {
+                // Z = (X - Mean) / STD
+                zData.push((pt.raw[p] - means[p]) / stds[p]);
+            } else {
+                zData.push(null);
+            }
+        });
+
+        datasets.push({
+            label: paramNames[p],
+            data: zData,
+            borderColor: paramColors[p],
+            backgroundColor: paramColors[p],
+            borderWidth: 2,
+            pointRadius: 3,
+            fill: false,
+            tension: 0.1
+        });
+    }
+
+    rawParamsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: xLabels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'top' },
+                tooltip: {
+                    callbacks: {
+                        label: (context) => {
+                            const val = context.raw;
+                            return `${context.dataset.label}: ${val > 0 ? '+' : ''}${val.toFixed(2)} STD`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    title: { display: true, text: 'Z-Score (Std Deviations)' }
+                },
+                x: {
+                    title: { display: true, text: 'Calls' }
+                }
+            }
+        }
+    });
+}
 
 function renderPcaChart(d) {
     const ctx = document.getElementById('chart_pca').getContext('2d');
@@ -567,6 +672,7 @@ function loadReport() {
             document.getElementById('patientCallCount').textContent = shownText;
             
             renderAnomalyChart(d);
+            renderRawParamsChart(d);
             renderPcaChart(d);
             renderTopicChart(d);
         },
