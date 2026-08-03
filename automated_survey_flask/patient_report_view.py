@@ -1,11 +1,12 @@
-"""Per-patient 30-second prosody report.
+"""Single-Call Anomaly Detection via PCA Radial Depth.
 
-Three metrics — mean pitch (Hz), call length (s), and degree of voice breaks (%)
-— plotted over time with a configurable rolling baseline (window of last N calls)
-and a ±k·STD threshold band. Line segments change color when the patient's
-treatment, UTM source, or gender changes between consecutive calls; markers turn
-red when the value falls outside the band. Hover shows date, value, treatment,
-UTM, gender, and age at the time of the call.
+This view analyzes patient voice patterns over time, extracting a 5D feature
+vector (Pause, Spiking, F0, Jitter, CPP) from each call where the patient spoke
+for at least the threshold amount of time. It centers these vectors relative to
+the patient's baseline, applies PCA whitening based on a global reference cloud,
+and calculates an anomaly p-value using radial depth. Results are visualized
+using an Anomaly P-Value timeline, a 2D PCA projection map, and a normalized
+Z-score line chart for the raw parameters.
 """
 from datetime import datetime
 
@@ -58,32 +59,6 @@ def _extract_net_talk(pr):
     return total * ratio
 
 
-def _extract_v(pr, index):
-    if not isinstance(pr, dict): return None
-    stats = pr.get('stats')
-    if not stats: return None
-    v = stats.get('v')
-    if not isinstance(v, list) or len(v) <= index: return None
-    return _safe_float(v[index])
-
-
-def _extract_s_scalar(pr):
-    if not isinstance(pr, dict): return None
-    stats = pr.get('stats')
-    if not stats: return None
-    return _safe_float(stats.get('s'))
-
-
-METRICS = [
-    ('pause_duration_v',    'Pause Duration (v)',    lambda pr: _extract_v(pr, 0)),
-    ('spiking_rate_v',      'Spiking Rate (v)',      lambda pr: _extract_v(pr, 1)),
-    ('f0_variability_hz_v', 'F0 Variability (v)',    lambda pr: _extract_v(pr, 2)),
-    ('jitter_local_v',      'Jitter Local (v)',      lambda pr: _extract_v(pr, 3)),
-    ('cpp_v',               'CPP (v)',               lambda pr: _extract_v(pr, 4)),
-    ('s_scalar',            'S Scalar',              _extract_s_scalar),
-]
-
-
 # --- Helpers -----------------------------------------------------------------
 
 def _patient_for(patient_id):
@@ -117,23 +92,6 @@ def _age_at(birth_year, when):
         return int(when.year) - int(birth_year)
     except (TypeError, ValueError):
         return None
-
-
-def _baseline_stats(values, window):
-    """Mean and population stddev over the last `window` non-null values. Returns
-    (mean, std, n) or (None, None, 0) when there aren't enough numeric points."""
-    nums = [v for v in values if v is not None]
-    if not nums:
-        return None, None, 0
-    sample = nums[-window:] if window > 0 else nums
-    n = len(sample)
-    if n == 0:
-        return None, None, 0
-    mean = sum(sample) / n
-    if n < 2:
-        return mean, 0.0, n
-    var = sum((x - mean) ** 2 for x in sample) / n
-    return mean, var ** 0.5, n
 
 
 # --- Routes ------------------------------------------------------------------
@@ -199,20 +157,7 @@ def patient_report_data(patient_id):
     def _extract_5d_vector(pr):
         if not isinstance(pr, dict): return None
         
-        # We need the base metrics: pause, spiking, f0, jitter, cpp
-        # Fallback to the 'v' array in 'stats' if pre-computed, but since we are doing
-        # raw un-normalized values, it's safer to extract the raw values directly.
-        # However, the user's `prosody.py` calculates them as `x1..x5`.
-        # For this prototype, we'll extract the raw values assuming they exist,
-        # or fallback to the pre-computed 'v' vector from the dictionary.
-        
-        stats_dict = pr.get('stats')
-        if not stats_dict: return None
-        
-        # The user's prosody.py calculates 'v' as normalized. We need raw to calculate mean.
-        # But wait, the user's spec says "find the mean of each parameter".
-        # Let's extract the raw features from `prosody_results`.
-        
+        # We require the raw base metrics: pause, spiking, f0, jitter, cpp
         pause = _safe_float(pr.get('pause_duration'))
         spiking = _safe_float(pr.get('spiking_rate'))
         f0 = _safe_float(pr.get('f0_variability_hz'))
@@ -220,9 +165,7 @@ def patient_report_data(patient_id):
         jitter = _safe_float(vqs.get('jitter_local'))
         cpp = _safe_float(pr.get('cpp'))
         
-        # If raw aren't available in top level (legacy calls), try to fallback 
-        # to the 'dictionary' mapping in 'stats' if it existed, but it's risky.
-        # We will require all 5 raw metrics to be present.
+        # We require all 5 raw metrics to be present to build a complete vector.
         if None in (pause, spiking, f0, jitter, cpp):
             return None
             
