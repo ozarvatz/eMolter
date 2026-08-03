@@ -427,14 +427,32 @@ def patient_report_data(patient_id):
     })
 
 
-@app.route('/api/therapist/calls/<int:call_id>/conversation')
+@app.route('/api/therapist/calls/<path:call_id>/conversation')
 @csrf.exempt
 @login_required
 def call_conversation_data(call_id):
     """Return one call's conversation + topics for the modal viewer.
     Auth: patient must belong to current therapist (or superuser)."""
     import json as _json
-    call = Call.query.get(call_id)
+    
+    # Handle virtual calls gracefully
+    if str(call_id).startswith('v_'):
+        return jsonify({
+            'call_id': call_id,
+            'call_sid': f"sim_{call_id}",
+            'created_at': "2026-07-01 12:00",
+            'patient_phone': call_id.split('_')[1],
+            'recording_url': "", 
+            'turns': [{'q': 'System Note', 'a': 'This is a simulated call. No transcript or audio is available.'}],
+            'topics': {'bot_topics': [], 'patient_topics': []},
+        })
+        
+    try:
+        real_call_id = int(call_id)
+    except ValueError:
+        abort(404)
+
+    call = Call.query.get(real_call_id)
     if not call:
         abort(404)
 
@@ -488,6 +506,7 @@ def call_conversation_data(call_id):
         'call_sid':    call.call_sid,
         'created_at':  call.created_at.strftime('%Y-%m-%d %H:%M') if call.created_at else None,
         'patient_phone': call.patient_phone,
+        'recording_url': call.recording_url,
         'turns':       turns,
         'topics': {
             'bot_topics':     topics.get('bot_topics', []) or [],

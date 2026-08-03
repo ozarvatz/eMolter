@@ -129,6 +129,12 @@
                 <div id="modalLoading" class="text-muted">Loading…</div>
                 <div id="modalError" class="alert alert-danger" style="display:none;"></div>
                 <div id="modalContent" style="display:none;">
+                    <div id="audioPlayerContainer" style="display:none; margin-bottom: 15px; text-align: center; background: #f8f9fa; padding: 10px; border-radius: 8px;">
+                        <strong style="display:block; margin-bottom:5px;">Call Recording</strong>
+                        <audio id="callAudioPlayer" controls style="width: 100%; max-width: 400px; height: 35px;">
+                            Your browser does not support the audio element.
+                        </audio>
+                    </div>
                     <div class="row" style="margin-bottom: 15px;">
                         <div class="col-md-6">
                             <strong>Bot topics</strong>
@@ -706,6 +712,15 @@ function loadReport() {
 }
 
 // --- Conversation modal -----------------------------------------------------
+// Bind modal close event to stop audio
+$('#conversationModal').on('hidden.bs.modal', function () {
+    const audioPlayer = document.getElementById('callAudioPlayer');
+    if (audioPlayer) {
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+    }
+});
+
 function openConversationModal(callId) {
     document.getElementById('modalLoading').style.display = '';
     document.getElementById('modalContent').style.display = 'none';
@@ -723,6 +738,16 @@ function openConversationModal(callId) {
             document.getElementById('conversationModalSubtitle').textContent =
                 'Call #' + d.call_id + ' · ' + (d.created_at || 'no date') +
                 ' · ' + (d.patient_phone || '');
+
+            const audioContainer = document.getElementById('audioPlayerContainer');
+            const audioPlayer = document.getElementById('callAudioPlayer');
+            if (d.recording_url && d.recording_url.trim() !== '') {
+                audioPlayer.src = d.recording_url;
+                audioContainer.style.display = 'block';
+            } else {
+                audioPlayer.src = '';
+                audioContainer.style.display = 'none';
+            }
 
             renderTopicPills('botTopics',     d.topics.bot_topics,     'bot');
             renderTopicPills('patientTopics', d.topics.patient_topics, 'patient');
