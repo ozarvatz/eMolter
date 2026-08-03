@@ -39,6 +39,17 @@
                    style="vertical-align: middle; width: 100px;" autocomplete="off" />
             <span id="pAlphaValue" style="font-weight: bold;">0.02</span>
         </div>
+        <div class="form-group" style="margin-right: 20px;">
+            <label for="excludeNInput">Exclude Last N:</label>
+            <input id="excludeNInput" type="range" min="1" max="10" step="1" value="2"
+                   style="vertical-align: middle; width: 100px;" autocomplete="off" />
+            <span id="excludeNValue" style="font-weight: bold;">2</span>
+        </div>
+        <div class="checkbox" style="margin-right: 20px;">
+            <label>
+                <input type="checkbox" id="excludePatientInput" value="true"> Exclude from Global Cloud
+            </label>
+        </div>
         <span class="text-muted" id="loadingIndicator" style="display:none;">
             <span class="glyphicon glyphicon-refresh spinning"></span>
         </span>
@@ -189,15 +200,18 @@ function renderRawParamsChart(d) {
     if (rawParamsChart) rawParamsChart.destroy();
     if (!d.pca_2d_points || d.pca_2d_points.length === 0) return;
 
-    // 1. Extract valid raw vectors
+    // 1. Extract valid raw vectors strictly from visible AND processed calls
     let validRawData = [];
-    d.pca_2d_points.forEach(pt => {
-        if (pt && pt.raw) validRawData.push(pt.raw);
+    d.pca_2d_points.forEach((pt, i) => {
+        // Only use calls that have a raw vector (net_talk > threshold)
+        if (pt && pt.raw) {
+            validRawData.push(pt.raw);
+        }
     });
 
     if (validRawData.length < 2) return;
 
-    // 2. Calculate mean and std for each of the 5 parameters
+    // 2. Calculate mean and std for each of the 5 parameters ONLY using valid calls
     const means = [0, 0, 0, 0, 0];
     const stds = [0, 0, 0, 0, 0];
     const n = validRawData.length;
@@ -222,7 +236,8 @@ function renderRawParamsChart(d) {
     const datasets = [];
     for (let p = 0; p < 5; p++) {
         const zData = [];
-        d.pca_2d_points.forEach(pt => {
+        // Map over ALL visible calls to maintain chart alignment, injecting nulls for skipped calls
+        d.pca_2d_points.forEach((pt, i) => {
             if (pt && pt.raw) {
                 // Z = (X - Mean) / STD
                 zData.push((pt.raw[p] - means[p]) / stds[p]);
@@ -239,7 +254,8 @@ function renderRawParamsChart(d) {
             borderWidth: 2,
             pointRadius: 3,
             fill: false,
-            tension: 0.1
+            tension: 0.1,
+            spanGaps: true
         });
     }
 
@@ -287,11 +303,12 @@ function renderPcaChart(d) {
 
     // 2. Patient's Historical Calls (Grey)
     const histData = [];
-    // 3. Patient's Last 2 Calls (Highlighted)
+    // 3. Patient's Last N Calls (Highlighted)
     const last2Data = [];
     
     const n = d.pca_2d_points.length;
     const startIdx = d.n_calls - d.n_visible;
+    const excludeN = parseInt(document.getElementById('excludeNInput').value) || 2;
     
     d.pca_2d_points.forEach((pt, i) => {
         if (!pt) return;
@@ -306,7 +323,7 @@ function renderPcaChart(d) {
             is_anomaly: d.is_anomaly[i]
         };
         
-        if (i >= n - 2) {
+        if (i >= n - excludeN) {
             last2Data.push(dataPoint);
         } else {
             histData.push(dataPoint);
@@ -331,7 +348,7 @@ function renderPcaChart(d) {
         }
     };
     
-    // Add Arrows and Tangents for the last 2 calls
+    // Add Arrows and Tangents for the last N calls
     last2Data.forEach((pt, index) => {
         // Arrow from 0,0 to the point
         dynamicAnnotations[`radial_${index}`] = {
@@ -403,7 +420,7 @@ function renderPcaChart(d) {
                     borderWidth: 1
                 },
                 {
-                    label: 'Patient Last 2 Calls',
+                    label: `Patient Last ${excludeN} Calls`,
                     data: last2Data,
                     backgroundColor: last2Data.map(pt => pt.is_anomaly ? '#d62728' : '#ff7f0e'),
                     pointStyle: last2Data.map(pt => pt.is_anomaly ? 'star' : 'triangle'),
@@ -625,9 +642,12 @@ function loadReport() {
     const netTalkThr = document.getElementById('netTalkThresholdInput').value;
     const pAlphaInput = document.getElementById('pAlphaInput');
     const pAlpha = pAlphaInput.value;
+    const excludeN = document.getElementById('excludeNInput').value;
+    const excludeTarget = document.getElementById('excludePatientInput').checked;
 
     document.getElementById('visibleValue').textContent = visible;
     document.getElementById('netTalkThresholdValue').textContent = netTalkThr;
+    document.getElementById('excludeNValue').textContent = excludeN;
     
     if (pAlpha) {
          document.getElementById('pAlphaValue').textContent = pAlpha;
@@ -642,7 +662,9 @@ function loadReport() {
 
     const ajaxData = {
         visible: visible,
-        net_talk_threshold: netTalkThr
+        net_talk_threshold: netTalkThr,
+        exclude_target: excludeTarget,
+        exclude_n: excludeN
     };
     if (pAlpha) {
         ajaxData.p_value_threshold = pAlpha;
@@ -771,12 +793,18 @@ function scheduleLoad() {
 }
 
 $(document).ready(function() {
-    ['visibleInput', 'netTalkThresholdInput', 'pAlphaInput'].forEach(id => {
+    ['visibleInput', 'netTalkThresholdInput', 'pAlphaInput', 'excludeNInput'].forEach(id => {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener('input', scheduleLoad);
         }
     });
+    
+    const excludeEl = document.getElementById('excludePatientInput');
+    if (excludeEl) {
+        excludeEl.addEventListener('change', scheduleLoad);
+    }
+    
     loadReport();
 });
 </script>

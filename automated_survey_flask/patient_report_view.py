@@ -185,6 +185,14 @@ def patient_report_data(patient_id):
     except (TypeError, ValueError):
         p_alpha = 0.02
 
+    exclude_target = request.args.get('exclude_target') == 'true'
+
+    try:
+        exclude_n = int(request.args.get('exclude_n', 2))
+    except (TypeError, ValueError):
+        exclude_n = 2
+    exclude_n = max(0, min(exclude_n, 100))
+
     import numpy as np
     from sklearn.decomposition import PCA
 
@@ -290,12 +298,17 @@ def patient_report_data(patient_id):
         if len(p_calls) < 2:
             continue # Need at least 2 calls to have a meaningful mean/variance
             
+        target_phone = v_phone if is_virtual else patient.phone
+        
+        # If checkbox is checked, completely skip the target patient for the global cloud
+        if exclude_target and phone == target_phone:
+            continue
+            
         vectors = np.array([c['vec'] for c in p_calls])
         
-        # Special logic for target patient: Exclude the last 2 calls from mean calculation
-        target_phone = v_phone if is_virtual else patient.phone
-        if phone == target_phone and len(vectors) > 2:
-            patient_mean = np.mean(vectors[:-2], axis=0)
+        # Special logic for target patient: Exclude the last N calls from mean calculation
+        if phone == target_phone and len(vectors) > exclude_n and exclude_n > 0:
+            patient_mean = np.mean(vectors[:-exclude_n], axis=0)
         else:
             patient_mean = np.mean(vectors, axis=0)
             
@@ -340,9 +353,9 @@ def patient_report_data(patient_id):
     
     if target_data:
         t_vectors = np.array([c['vec'] for c in target_data])
-        # Re-calculate the exact same mean we used above (excluding last 2 if > 2)
-        if len(t_vectors) > 2:
-            t_mean = np.mean(t_vectors[:-2], axis=0)
+        # Re-calculate the exact same mean we used above (excluding last N if > N)
+        if len(t_vectors) > exclude_n and exclude_n > 0:
+            t_mean = np.mean(t_vectors[:-exclude_n], axis=0)
         else:
             t_mean = np.mean(t_vectors, axis=0)
             
@@ -414,6 +427,13 @@ def patient_report_data(patient_id):
     pca_2d_points = []
     
     for c in display_slice:
+        cid = c['id'] if is_virtual else c.id
+        score_data = anomaly_scores.get(cid)
+        
+        # SKIP if no score (did not pass net_talk filter)
+        if not score_data:
+            continue
+            
         if is_virtual:
             dates.append(c['date'])
             call_ids.append(c['id'])
@@ -422,8 +442,6 @@ def patient_report_data(patient_id):
             genders.append('v')
             ages.append(26)
             patient_topics.append([])
-            cid = c['id']
-            # We stored vec directly in the dict
             raw_vec = c['vec']
         else:
             dates.append(c.created_at.strftime('%Y-%m-%d %H:%M') if c.created_at else None)
@@ -433,24 +451,17 @@ def patient_report_data(patient_id):
             genders.append(c.patient_gender)
             ages.append(_age_at(c.patient_birth_year, c.created_at))
             patient_topics.append(c.topics.get('patient_topics', []) if c.topics else [])
-            cid = c.id
             raw_vec = _extract_5d_vector(c.prosody_results)
         
-        score_data = anomaly_scores.get(cid)
-        if score_data:
-            call_p_values.append(score_data['p_value'])
-            is_anomaly.append(score_data['p_value'] < p_alpha)
-            pca_2d_points.append({
-                'x': score_data['x'],
-                'y': score_data['y'],
-                'dist': score_data['dist'],
-                'angle': score_data['angle'],
-                'raw': raw_vec
-            })
-        else:
-            call_p_values.append(None)
-            is_anomaly.append(False)
-            pca_2d_points.append(None)
+        call_p_values.append(score_data['p_value'])
+        is_anomaly.append(score_data['p_value'] < p_alpha)
+        pca_2d_points.append({
+            'x': score_data['x'],
+            'y': score_data['y'],
+            'dist': score_data['dist'],
+            'angle': score_data['angle'],
+            'raw': raw_vec
+        })
 
     return jsonify({
         'patient': patient_data,
